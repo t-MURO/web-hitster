@@ -35,7 +35,13 @@ import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
 import { api } from "./api.js";
+import {
+  inviteCodeFromPath,
+  normalizeRoomCode,
+  roomInviteUrl,
+} from "./room-url.js";
 import { useRoom } from "./useRoom.js";
+import { useSynchronizedAudio } from "./useSynchronizedAudio.js";
 import type {
   ClientConfig,
   CurrentRoundSnapshot,
@@ -61,6 +67,7 @@ type ActiveGame = GameSnapshot & {
 };
 type ActiveRoom = RoomSnapshot & { game: ActiveGame };
 type FinishedRoom = RoomSnapshot & { game: GameSnapshot };
+type SynchronizedAudioControls = ReturnType<typeof useSynchronizedAudio>;
 
 function hasGame(room: RoomSnapshot): room is FinishedRoom {
   return room.game !== null;
@@ -249,7 +256,9 @@ function HomeScreen({
   joinRoom: (code: string) => Promise<unknown>;
   onLogout: () => Promise<void>;
 }) {
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(
+    () => inviteCodeFromPath(window.location.pathname) ?? "",
+  );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
 
@@ -283,8 +292,8 @@ function HomeScreen({
             <span className="eyebrow">Game master</span>
             <h1>Start a room</h1>
             <p>
-              Upload a private 50-track deck, invite 1–4 friends, and control
-              the external audio cues.
+              Import a Spotify playlist, let the server prepare temporary
+              audio, then invite 1–4 friends.
             </p>
             <button
               className="primary-button"
@@ -310,7 +319,7 @@ function HomeScreen({
               id="room-code"
               maxLength={5}
               onChange={(event) =>
-                setCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))
+                setCode(normalizeRoomCode(event.target.value))
               }
               placeholder="J7K4Q"
               value={code}
@@ -327,7 +336,7 @@ function HomeScreen({
         </div>
         <ErrorBanner message={error} onClose={() => setError("")} />
         <p className="privacy-note">
-          Rooms live in memory only. Audio stays outside this app. First to
+          Rooms and prepared audio are temporary. First to{" "}
           {config.winningTimelineSize} timeline cards wins.
         </p>
       </section>
@@ -395,6 +404,7 @@ function LobbyScreen({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [copied, setCopied] = useState(false);
+  const [playlistUrl, setPlaylistUrl] = useState("");
 
   async function run(label: string, callback: AsyncCallback) {
     setBusy(label);
@@ -416,8 +426,10 @@ function LobbyScreen({
     event.target.value = "";
   }
 
-  async function copyCode() {
-    await navigator.clipboard.writeText(room.code);
+  async function copyInvite() {
+    await navigator.clipboard.writeText(
+      roomInviteUrl(room.code, window.location.origin),
+    );
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   }
@@ -428,6 +440,10 @@ function LobbyScreen({
     room.players.every((player) => player.connected) &&
     room.deck?.ready,
   );
+  const preparation = room.deck?.preparation;
+  const progressPercent = preparation?.total
+    ? Math.round((preparation.processed / preparation.total) * 100)
+    : 0;
 
   return (
     <main className="lobby-shell">
@@ -436,7 +452,7 @@ function LobbyScreen({
         connected={connected}
         onLeave={() => run("leave", () => command("leaveRoom"))}
       >
-        <button className="topbar-button" onClick={copyCode} type="button">
+        <button className="topbar-button" onClick={copyInvite} type="button">
           <Copy aria-hidden="true" />
           {copied ? "Copied" : "Copy invite"}
         </button>
@@ -448,8 +464,10 @@ function LobbyScreen({
           <h1>{room.isHost ? "Set the deck, then invite the room" : "Waiting for the host"}</h1>
           <p>
             {room.isHost
-              ? "Audio is played outside the app. The host alone sees each cue."
-              : "Keep your external voice or video call open so everyone hears the same cue."}
+              ? "Connect Spotify to import trusted metadata while the server prepares temporary room audio."
+              : room.deck?.audioMode === "hosted"
+                ? "The host is preparing synchronized audio for everyone in the room."
+                : "Keep your external voice or video call open for host-managed cues."}
           </p>
         </div>
 
@@ -488,7 +506,7 @@ function LobbyScreen({
           <article className="lobby-panel deck-panel">
             <div className="panel-title">
               <div>
-                <span className="eyebrow">Private deck</span>
+                <span className="eyebrow">Music deck</span>
                 <h2>{room.deck ? room.deck.name : "No deck loaded"}</h2>
               </div>
               <FileCsv aria-hidden="true" />
@@ -496,6 +514,129 @@ function LobbyScreen({
 
             {room.isHost ? (
               <>
+                <div className="spotify-import">
+                  <div className="spotify-import__status">
+                    <div>
+                      <span className="provider-mark">
+                        <span className="provider-mark__dot" />
+                        Spotify metadata
+                      </span>
+                      <small>
+                        {room.spotify.connected
+                          ? `Connected${room.spotify.displayName ? ` as ${room.spotify.displayName}` : ""}`
+                          : room.spotify.configured
+                            ? "Host login required"
+                            : "Not configured on this server"}
+                      </small>
+                    </div>
+                    {room.spotify.configured && !room.spotify.connected && (
+                      <a
+                        className="secondary-button spotify-connect"
+                        href={`/api/spotify/login?room=${encodeURIComponent(room.code)}`}
+                      >
+                        Connect Spotify
+                      </a>
+                    )}
+                  </div>
+                  {room.spotify.connected && (
+                    <form
+                      className="playlist-import-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void run("spotify-import", () =>
+                          api("/api/spotify/import", {
+                            method: "POST",
+                            body: JSON.stringify({
+                              code: room.code,
+                              playlistUrl,
+                            }),
+                          }),
+                        );
+                      }}
+                    >
+                      <label className="field-label" htmlFor="spotify-playlist">
+                        Owned or collaborative playlist link
+                      </label>
+                      <div>
+                        <input
+                          id="spotify-playlist"
+                          onChange={(event) => setPlaylistUrl(event.target.value)}
+                          placeholder="https://open.spotify.com/playlist/…"
+                          type="url"
+                          value={playlistUrl}
+                        />
+                        <button
+                          className="secondary-button"
+                          disabled={
+                            Boolean(busy) || playlistUrl.trim().length === 0
+                          }
+                          type="submit"
+                        >
+                          {busy === "spotify-import"
+                            ? "Reading playlist…"
+                            : "Import & prepare"}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+
+                {preparation && (
+                  <div
+                    className={`preparation-card preparation-card--${preparation.status}`}
+                    aria-live="polite"
+                  >
+                    <div className="preparation-card__heading">
+                      <strong>
+                        {preparation.status === "ready"
+                          ? "Room audio ready"
+                          : preparation.status === "failed"
+                            ? "Preparation needs attention"
+                            : "Preparing temporary MP3 files"}
+                      </strong>
+                      <span>
+                        {preparation.processed} / {preparation.total}
+                      </span>
+                    </div>
+                    <div
+                      className="preparation-progress"
+                      role="progressbar"
+                      aria-valuemax={preparation.total}
+                      aria-valuemin={0}
+                      aria-valuenow={preparation.processed}
+                    >
+                      <span style={{ width: `${progressPercent}%` }} />
+                    </div>
+                    <div className="preparation-card__details">
+                      <span>{preparation.readyCount} ready</span>
+                      <span>{preparation.failedCount} skipped</span>
+                      <small>{preparation.message}</small>
+                    </div>
+                    {preparation.failures.length > 0 && (
+                      <details className="failed-tracks">
+                        <summary>
+                          Excluded tracks ({preparation.failures.length})
+                        </summary>
+                        <div className="failed-tracks__list">
+                          {preparation.failures.map((failure) => (
+                            <div key={failure.id}>
+                              <span>
+                                <strong>{failure.title}</strong>
+                                <small>{failure.artist}</small>
+                              </span>
+                              <em>{failure.reason}</em>
+                            </div>
+                          ))}
+                        </div>
+                        <p>
+                          These tracks could not be prepared and will not appear
+                          in the game.
+                        </p>
+                      </details>
+                    )}
+                  </div>
+                )}
+
                 <div className="deck-actions">
                   <label className="secondary-button file-button">
                     <UploadSimple aria-hidden="true" />
@@ -526,7 +667,9 @@ function LobbyScreen({
                     <strong>{room.deck.trackCount} unique tracks</strong>
                     <span>
                       {room.deck.ready
-                        ? `${room.rules.deckSize} will be shuffled into the game`
+                        ? preparation?.status === "processing"
+                          ? "Enough are ready—you can start while the rest finish"
+                          : `${room.rules.deckSize} will be shuffled into the game`
                         : `${room.rules.deckSize - room.deck.trackCount} more required`}
                     </span>
                   </div>
@@ -567,9 +710,20 @@ function LobbyScreen({
               <div className="waiting-card">
                 {room.deck ? (
                   <>
-                    <Check weight="bold" aria-hidden="true" />
-                    <strong>{room.deck.trackCount} tracks ready</strong>
-                    <span>Only the host can review the mystery deck.</span>
+                    {preparation?.status === "processing" ? (
+                      <Waveform aria-hidden="true" />
+                    ) : (
+                      <Check weight="bold" aria-hidden="true" />
+                    )}
+                    <strong>
+                      {preparation?.status === "processing"
+                        ? `${preparation.readyCount} of ${preparation.total} tracks prepared`
+                        : `${room.deck.trackCount} tracks ready`}
+                    </strong>
+                    <span>
+                      {preparation?.message ??
+                        "Only the host can review the mystery deck."}
+                    </span>
                   </>
                 ) : (
                   <>
@@ -815,6 +969,97 @@ function HostCue({
   );
 }
 
+function HostedCue({
+  audio,
+  playback,
+  command,
+  busy,
+  run,
+  isHost,
+}: {
+  audio: SynchronizedAudioControls;
+  playback: PlaybackSnapshot;
+  command: RoomCommand;
+  busy: string;
+  run: RunAction;
+  isHost: boolean;
+}) {
+  if (!audio.hosted) return null;
+  const needsEnable = !audio.enabled || Boolean(audio.error);
+  return (
+    <aside className="host-cue hosted-cue">
+      <div>
+        <span className="eyebrow">Private room audio</span>
+        <strong>Mystery track loaded from the server</strong>
+        <small>No title, artist, or cover is exposed before reveal.</small>
+      </div>
+      <div className="host-cue__source hosted-cue__readiness">
+        <span>
+          {audio.loading
+            ? "Downloading and decoding this round…"
+            : audio.ready
+              ? "Your audio is ready"
+              : "Enable audio to preload this round"}
+        </span>
+        <em className={audio.allReady ? "is-ready" : ""}>
+          {audio.readyCount} / {audio.requiredCount} players ready
+        </em>
+      </div>
+      <div className="host-cue__controls">
+        {needsEnable ? (
+          <button
+            className="cue-button cue-button--play"
+            disabled={audio.loading || Boolean(busy)}
+            onClick={() => run("enable-audio", audio.enable)}
+            type="button"
+          >
+            <Headphones weight="fill" />
+            {audio.error ? "Retry audio" : "Enable audio"}
+          </button>
+        ) : isHost ? (
+          <>
+            <button
+              className="cue-button cue-button--play"
+              disabled={Boolean(busy) || !audio.allReady}
+              onClick={() =>
+                run("cue", () =>
+                  command(
+                    playback.status === "playing"
+                      ? "restartCue"
+                      : "playCue",
+                  ),
+                )
+              }
+              type="button"
+            >
+              {playback.status === "playing" ? (
+                <ArrowsClockwise />
+              ) : (
+                <Play weight="fill" />
+              )}
+              {playback.status === "playing" ? "Restart cue" : "Start cue"}
+            </button>
+            <button
+              className="cue-button"
+              disabled={Boolean(busy) || playback.status !== "playing"}
+              onClick={() => run("pause", () => command("pauseCue"))}
+              type="button"
+            >
+              <Pause weight="fill" />
+              Pause
+            </button>
+          </>
+        ) : (
+          <span className="audio-ready-label">
+            <Check weight="bold" aria-hidden="true" />
+            Ready for host
+          </span>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 function HostMenu({
   close,
   command,
@@ -876,6 +1121,7 @@ function GameScreen({
   const [hostMenuOpen, setHostMenuOpen] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const synchronizedAudio = useSynchronizedAudio(room, command);
   const game = room.game;
   const activePlayer = room.players.find((player) => player.id === game.activePlayerId);
   const timeline = game.timelines[game.activePlayerId] ?? [];
@@ -899,6 +1145,12 @@ function GameScreen({
     ? correct
       ? `Correct · ${game.current.track?.year ?? "—"}`
       : `${game.current.track?.year ?? "—"} · Wrong gap`
+    : synchronizedAudio.hosted && !synchronizedAudio.enabled
+      ? "Enable audio"
+      : synchronizedAudio.hosted && synchronizedAudio.loading
+        ? "Loading round"
+        : synchronizedAudio.hosted && !synchronizedAudio.allReady
+          ? "Players loading"
     : room.playback.status === "playing"
       ? "Listening"
       : room.playback.status === "paused"
@@ -953,6 +1205,14 @@ function GameScreen({
         busy={busy}
         command={command}
         cue={room.hostCue}
+        playback={room.playback}
+        run={run}
+      />
+      <HostedCue
+        audio={synchronizedAudio}
+        busy={busy}
+        command={command}
+        isHost={room.isHost}
         playback={room.playback}
         run={run}
       />
@@ -1030,7 +1290,10 @@ function GameScreen({
             </span>
           )}
         </div>
-        <ErrorBanner message={error} onClose={() => setError("")} />
+        <ErrorBanner
+          message={error || synchronizedAudio.error}
+          onClose={() => setError("")}
+        />
       </section>
       <PublicTimelines activePlayerId={game.activePlayerId} room={room} />
     </main>

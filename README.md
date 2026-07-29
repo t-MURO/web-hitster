@@ -1,41 +1,94 @@
 # Music Timeline
 
-A private, fully remote music-timeline game for 2–5 friends. The app manages
-rooms, turns, timelines, scoring, reconnects, and reveals. Audio remains outside
-the app and is controlled manually by the host.
+A private, fully remote music-timeline game for 2–5 friends. The host imports an
+owned or collaborative Spotify playlist, the server pairs its authoritative
+metadata with a YouTube search result, prepares temporary MP3 files, and
+synchronizes blind playback across the room.
 
 ## What works
 
-- Temporary five-character room codes
-- Fixed 2–5-player roster with no late joining after the game starts
-- CSV or JSON deck upload with year corrections
-- Fifty shuffled tracks with no repeats
-- Unique starting cards and randomized turn order
-- Blind placement, automatic reveal, and flexible same-year placement
-- First timeline to 10 cards wins
-- Highest score wins if the deck is exhausted
-- Host cue controls for externally managed audio
-- Two-minute reconnect window, player removal, and host transfer
-- Rematches with the same locked roster
-- No accounts, game history, statistics, or persistent room data
+- Temporary five-character room codes and shareable `/room/CODE` invite URLs
+- Fixed 2–5-player roster with no late joining after play starts
+- Host-only Spotify Authorization Code login; secrets and tokens stay server-side
+- Spotify title, artists, album release year, cover, duration, and ISRC metadata
+- Asynchronous YouTube search plus `yt-dlp`/`ffmpeg` MP3 preparation
+- Live preparation progress, skipped-track count, and host year review
+- Start as soon as 50 unique tracks are ready; no repeats within a game
+- Authenticated per-round MP3 delivery with HTTP range support
+- Client preload acknowledgements and server-scheduled synchronized starts
+- Blind placement, reveal, scoring, reconnects, host transfer, and rematches
+- CSV/JSON decks with host-managed external cues as a fallback
+- No accounts, history, statistics, database, or persistent media
 
-## Audio model
+## Hosted audio flow
 
-The host sees a private `audioCue` for the current track and plays it using a
-separate music player. Everyone listens through the already-established voice
-or video call. The app never authenticates with, controls, or reads data from a
-music provider.
+1. The host creates a room and connects Spotify.
+2. The host pastes a playlist they own or collaborate on.
+3. Spotify supplies the game metadata. The server searches YouTube for each
+   title and artist, extracts MP3 audio, and stores it under a room-specific
+   temporary directory.
+4. A game can start once at least 50 tracks have succeeded. Each browser enables
+   audio once, downloads the opaque current-round MP3, decodes it locally, and
+   reports readiness.
+5. The host starts playback only after every connected player is ready. The
+   server broadcasts a shared future start time so clients begin together.
+6. Files remain available for rematches and are deleted when the room empties,
+   expires, or the process/container restarts.
 
-Because the cue includes the answer, the fairest setup uses a non-playing game
-master. A playing host can still run the room, but should delegate cue playback
-if they want to remain blind.
+The current mystery title, artist, cover, Spotify link, YouTube result, and
+filesystem path are never included in pre-reveal room state.
 
-Use only audio you are entitled to play for your group.
+To bound temporary storage and preparation time, one import uses at most the
+first 200 eligible unique playlist tracks.
 
-## Deck format
+## Spotify setup
 
-Download [`public/deck-template.csv`](public/deck-template.csv) or upload JSON
-with a `tracks` array. A production deck needs at least 50 unique tracks.
+Create a Spotify Developer application and register the exact redirect URI:
+
+```text
+https://your-music-subdomain.example/api/spotify/callback
+```
+
+Set the same value in `SPOTIFY_REDIRECT_URI`. The host grants only
+`playlist-read-private` and `playlist-read-collaborative`. Under Spotify's
+current Development Mode rules, playlist items are readable only for playlists
+the logged-in host owns or collaborates on.
+
+## Run locally
+
+Install Node.js 22+, `yt-dlp`, and `ffmpeg`. Copy `.env.example` to `.env`,
+replace the public URL and Spotify credentials, then run:
+
+```sh
+npm install
+npm run dev
+```
+
+Without Spotify credentials the app still starts and the demo/upload fallback
+remains available.
+
+## Run on a home server
+
+1. Copy `.env.example` to `.env`, generate a strong `SESSION_SECRET`, and set
+   `PUBLIC_BASE_URL`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, and the exact
+   `SPOTIFY_REDIRECT_URI`.
+2. Build and start the container:
+
+   ```sh
+   docker compose up -d --build
+   docker compose ps
+   ```
+
+3. Point the existing Cloudflare Tunnel hostname to
+   `http://localhost:4317`. The Compose port binds only to `127.0.0.1`.
+4. Optionally put Cloudflare Access in front of the hostname.
+
+The image includes `yt-dlp` and `ffmpeg`. Its filesystem is read-only except for
+a 2 GB `/tmp` tmpfs used by ephemeral room audio.
+
+## Fallback deck format
+
+Download `public/deck-template.csv` or upload JSON with a `tracks` array.
 
 | Field | Required | Description |
 | --- | --- | --- |
@@ -45,48 +98,16 @@ with a `tracks` array. A production deck needs at least 50 unique tracks.
 | `audioCue` | yes | Host-only URL or private playback note |
 | `coverUrl` | no | `http(s)` cover image URL |
 
-Rooms and uploaded decks exist only in server memory. Restarting the container
-clears them.
+## Policy and rights warning
 
-## Run locally
-
-```sh
-npm install
-npm run dev
-```
-
-Open `http://127.0.0.1:4317`. Development mode includes a generated demo deck.
-
-## Run on a home server
-
-1. Copy the environment template and generate a session secret:
-
-   ```sh
-   cp .env.example .env
-   openssl rand -base64 48
-   ```
-
-2. Put the generated value in `SESSION_SECRET` and set `PUBLIC_BASE_URL` to the
-   HTTPS hostname you will use.
-
-3. Start the single container:
-
-   ```sh
-   docker compose up -d --build
-   docker compose ps
-   ```
-
-4. In your existing Cloudflare Tunnel, add a public hostname pointing to:
-
-   ```text
-   http://localhost:4317
-   ```
-
-5. Optionally protect the hostname with Cloudflare Access so only invited
-   friends can reach the room screen.
-
-The Compose port is bound to `127.0.0.1`, so the service is exposed through the
-tunnel rather than directly on the home network.
+This repository implements an intentionally private, non-commercial prototype.
+Spotify currently prohibits games/trivia using its developer platform, and
+YouTube prohibits downloading, caching, separating, or redistributing its
+audio without permission. Private use does not create a policy or copyright
+exception. Operate this only with content and permissions you are entitled to
+use, and do not expose it publicly without replacing this prototype pipeline
+with a licensed source. The verified platform research is in
+`docs/spotify-platform-research.md` and `docs/youtube-platform-research.md`.
 
 ## Verification
 
@@ -94,16 +115,4 @@ tunnel rather than directly on the home network.
 npm run typecheck
 npm test
 npm run build
-curl http://127.0.0.1:4317/api/health
 ```
-
-The React client, realtime server, game engine, deck parser, and multiplayer
-tests are written in strict TypeScript. Shared room and game contracts live in
-[`shared/types.ts`](shared/types.ts).
-
-## Spotify note
-
-Spotify integration is intentionally not implemented. Spotify's current
-Developer Policy prohibits games/trivia and separately conflicts with the blind
-playback mechanic. The primary-source research is in
-[`docs/spotify-platform-research.md`](docs/spotify-platform-research.md).

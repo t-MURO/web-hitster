@@ -11,6 +11,22 @@ export interface Session {
   touchedAt: number;
   profile: PlayerProfile | null;
   roomCode: string | null;
+  spotify: SpotifySession | null;
+  spotifyOAuth: SpotifyOAuthAttempt | null;
+}
+
+export interface SpotifySession {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  displayName: string | null;
+  accountId: string | null;
+}
+
+export interface SpotifyOAuthAttempt {
+  state: string;
+  roomCode: string;
+  createdAt: number;
 }
 
 declare global {
@@ -100,6 +116,8 @@ export class SessionStore {
           touchedAt: Date.now(),
           profile: null,
           roomCode: null,
+          spotify: null,
+          spotifyOAuth: null,
         };
         this.#sessions.set(id, session);
         response.setHeader("Set-Cookie", this.#cookie(this.#serialize(id)));

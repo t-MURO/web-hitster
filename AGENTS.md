@@ -15,11 +15,20 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - The hero state is the live desktop round: five connected players, Maya active, a public chronological timeline, a hidden song, selectable insertion gaps, and one dominant `LOCK IN` action.
 - Never show the current mystery song title, artist, or cover before reveal.
 - Keep the interface original. Do not use HITSTER branding, assets, or trade dress.
-- The production implementation is desktop-only and provider-neutral. It uses
-  temporary in-memory rooms, host-uploaded CSV/JSON decks, Socket.IO state
-  synchronization, and host-managed external audio cues.
-- Do not add Spotify authentication, Spotify API calls, or automated provider
-  playback. Current policy research is recorded in
-  `docs/spotify-platform-research.md`.
+- The production implementation is desktop-only. Its primary private-prototype
+  happy path uses host-only Spotify Authorization Code login to import trusted
+  metadata from an owned or collaborative playlist, then uses `yt-dlp` and
+  `ffmpeg` on the server to prepare temporary MP3 files for authenticated,
+  synchronized room playback. CSV/JSON decks and host-managed external cues
+  remain available as a fallback.
+- Never expose the current mystery title, artist, cover, Spotify URL, YouTube
+  result, or temporary filesystem path before reveal. Clients fetch audio only
+  through an opaque authenticated room-and-round endpoint.
+- Begin a hosted game once at least 50 unique tracks have been prepared. Track
+  client readiness before host playback, preserve temporary audio for rematches,
+  and delete it when the room closes, expires, or the server restarts.
+- This is an intentionally private, non-commercial prototype. The user accepts
+  the documented Spotify and YouTube policy risks for this happy-path build;
+  keep those risks explicit in project documentation.
 - Keep room and deck data ephemeral: no game history, player statistics, or
   persistent database for version one.

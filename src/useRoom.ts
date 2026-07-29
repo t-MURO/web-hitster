@@ -6,6 +6,7 @@ import type {
   RoomCommand,
   RoomSnapshot,
 } from "../shared/types.js";
+import { replaceRoomPath } from "./room-url.js";
 
 export interface RoomConnection {
   room: RoomSnapshot | null;
@@ -47,6 +48,9 @@ export function useRoom(enabled: boolean): RoomConnection {
         (timeoutError: Error | null, response?: RoomActionResponse) => {
           if (!timeoutError && response?.ok) {
             setRoom(response.result.snapshot);
+            if (response.result.snapshot) {
+              replaceRoomPath(response.result.snapshot.code);
+            }
           }
         },
       );
@@ -55,8 +59,14 @@ export function useRoom(enabled: boolean): RoomConnection {
     socket.on("connect_error", (error: Error) => {
       setConnectionError(error.message || "Realtime connection failed.");
     });
-    socket.on("room:state", (snapshot: RoomSnapshot) => setRoom(snapshot));
-    socket.on("room:left", () => setRoom(null));
+    socket.on("room:state", (snapshot: RoomSnapshot) => {
+      setRoom(snapshot);
+      replaceRoomPath(snapshot.code);
+    });
+    socket.on("room:left", () => {
+      setRoom(null);
+      replaceRoomPath(null);
+    });
 
     return () => {
       socket.disconnect();
@@ -89,6 +99,10 @@ export function useRoom(enabled: boolean): RoomConnection {
             } else {
               if (response.result.snapshot) {
                 setRoom(response.result.snapshot);
+                replaceRoomPath(response.result.snapshot.code);
+              } else if (response.result.left) {
+                setRoom(null);
+                replaceRoomPath(null);
               }
               resolve(response.result);
             }

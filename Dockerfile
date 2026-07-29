@@ -13,6 +13,9 @@ ENV NODE_ENV=production
 ENV PORT=4317
 WORKDIR /app
 
+RUN apk add --no-cache ffmpeg python3 py3-pip \
+  && pip3 install --no-cache-dir --break-system-packages yt-dlp
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 

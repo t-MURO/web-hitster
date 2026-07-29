@@ -21,12 +21,23 @@ export interface AppConfig {
   disconnectGraceMs: number;
   deckSize: number;
   winningTimelineSize: number;
+  spotifyClientId?: string;
+  spotifyClientSecret?: string;
+  spotifyRedirectUri?: string;
+  youtubeDownloaderPath?: string;
+  ffmpegPath?: string;
+  audioTempRoot?: string;
+  audioBitrateKbps?: number;
+  audioPreparationConcurrency?: number;
 }
 
-export type ClientConfig = Pick<
-  AppConfig,
-  "demoMode" | "deckSize" | "winningTimelineSize" | "disconnectGraceMs"
->;
+export interface ClientConfig {
+  demoMode: boolean;
+  deckSize: number;
+  winningTimelineSize: number;
+  disconnectGraceMs: number;
+  spotifyConfigured: boolean;
+}
 
 export interface Track {
   id: string;
@@ -36,6 +47,9 @@ export interface Track {
   originalYear: number;
   coverUrl: string | null;
   audioCue: string;
+  durationMs?: number | null;
+  isrc?: string | null;
+  spotifyUrl?: string | null;
 }
 
 export type PublicTrack = Pick<
@@ -88,15 +102,51 @@ export interface RoomPlayerSnapshot {
 
 export interface DeckSummary {
   name: string;
-  source: "upload" | "demo";
+  source: "upload" | "demo" | "spotify";
+  audioMode: "external" | "hosted";
   trackCount: number;
   ready: boolean;
+  preparation: DeckPreparationSnapshot | null;
+}
+
+export type DeckPreparationStatus =
+  | "queued"
+  | "processing"
+  | "ready"
+  | "failed";
+
+export interface DeckFailureSnapshot {
+  id: string;
+  title: string;
+  artist: string;
+  reason: string;
+}
+
+export interface DeckPreparationSnapshot {
+  status: DeckPreparationStatus;
+  total: number;
+  processed: number;
+  readyCount: number;
+  failedCount: number;
+  failures: DeckFailureSnapshot[];
+  currentTitle: string | null;
+  message: string | null;
 }
 
 export interface PlaybackSnapshot {
   status: PlaybackStatus;
   cueVersion: number;
   changedAt: number;
+  roundNumber: number;
+  startAt: number | null;
+  positionMs: number;
+  readyPlayerIds: string[];
+}
+
+export interface SpotifyConnectionSnapshot {
+  configured: boolean;
+  connected: boolean;
+  displayName: string | null;
 }
 
 export interface RoomRules {
@@ -115,6 +165,7 @@ export interface RoomSnapshot {
   rematchNumber: number;
   rules: RoomRules;
   players: RoomPlayerSnapshot[];
+  spotify: SpotifyConnectionSnapshot;
   deck: DeckSummary | null;
   deckReview: Track[] | null;
   playback: PlaybackSnapshot;

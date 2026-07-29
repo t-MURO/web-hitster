@@ -1,4 +1,7 @@
+import { existsSync } from "node:fs";
 import { createApplication } from "./create-app.js";
+
+if (existsSync(".env")) process.loadEnvFile(".env");
 
 const { httpServer, config } = await createApplication();
 

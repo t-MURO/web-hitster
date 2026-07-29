@@ -1,4 +1,6 @@
 import type { AppConfig } from "../shared/types.js";
+import os from "node:os";
+import path from "node:path";
 
 const DEFAULT_PORT = 4317;
 
@@ -34,6 +36,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       env.WINNING_TIMELINE_SIZE ?? "10",
       10,
     ),
+    spotifyClientId: env.SPOTIFY_CLIENT_ID?.trim() ?? "",
+    spotifyClientSecret: env.SPOTIFY_CLIENT_SECRET?.trim() ?? "",
+    spotifyRedirectUri:
+      env.SPOTIFY_REDIRECT_URI?.trim() ??
+      `${publicBaseUrl}/api/spotify/callback`,
+    youtubeDownloaderPath: env.YOUTUBE_DOWNLOADER_PATH?.trim() || "yt-dlp",
+    ffmpegPath: env.FFMPEG_PATH?.trim() || "ffmpeg",
+    audioTempRoot:
+      env.AUDIO_TEMP_ROOT?.trim() ||
+      path.join(os.tmpdir(), "music-timeline-audio"),
+    audioBitrateKbps: Number.parseInt(env.AUDIO_BITRATE_KBPS ?? "192", 10),
+    audioPreparationConcurrency: Number.parseInt(
+      env.AUDIO_PREPARATION_CONCURRENCY ?? "2",
+      10,
+    ),
   };
 }
 
@@ -56,6 +73,30 @@ export function validateConfig(config: AppConfig): string[] {
 
   if (config.deckSize < 12) {
     errors.push("DECK_SIZE must be at least 12.");
+  }
+
+  if (Boolean(config.spotifyClientId) !== Boolean(config.spotifyClientSecret)) {
+    errors.push(
+      "SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must either both be set or both be empty.",
+    );
+  }
+
+  if (
+    config.audioBitrateKbps != null &&
+    (!Number.isInteger(config.audioBitrateKbps) ||
+      config.audioBitrateKbps < 64 ||
+      config.audioBitrateKbps > 320)
+  ) {
+    errors.push("AUDIO_BITRATE_KBPS must be between 64 and 320.");
+  }
+
+  if (
+    config.audioPreparationConcurrency != null &&
+    (!Number.isInteger(config.audioPreparationConcurrency) ||
+      config.audioPreparationConcurrency < 1 ||
+      config.audioPreparationConcurrency > 5)
+  ) {
+    errors.push("AUDIO_PREPARATION_CONCURRENCY must be between 1 and 5.");
   }
 
   return errors;

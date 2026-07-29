@@ -732,6 +732,228 @@ a {
   margin-top: 20px;
 }
 
+.spotify-import {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid #355246;
+  border-radius: 7px;
+  background: #111a17;
+}
+
+.spotify-import__status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.spotify-import__status > div {
+  display: grid;
+  gap: 5px;
+}
+
+.spotify-import__status small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.provider-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--cream);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.provider-mark__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #64d985;
+  box-shadow: 0 0 0 4px rgb(100 217 133 / 10%);
+}
+
+.spotify-connect {
+  min-height: 40px;
+  padding-inline: 16px;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.playlist-import-form {
+  display: grid;
+  gap: 8px;
+}
+
+.playlist-import-form > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.playlist-import-form input {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #46524b;
+  border-radius: 6px;
+  background: #0c1110;
+  color: var(--cream);
+}
+
+.playlist-import-form .secondary-button {
+  min-height: 44px;
+  padding-inline: 15px;
+  font-size: 12px;
+}
+
+.preparation-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #55472f;
+  border-radius: 7px;
+  background: #19160f;
+}
+
+.preparation-card--ready {
+  border-color: #3e5b43;
+  background: #131b15;
+}
+
+.preparation-card--failed {
+  border-color: #774440;
+  background: #211312;
+}
+
+.preparation-card__heading,
+.preparation-card__details {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.preparation-card__heading {
+  justify-content: space-between;
+}
+
+.preparation-card__heading strong {
+  color: var(--cream);
+  font-size: 12px;
+}
+
+.preparation-card__heading span,
+.preparation-card__details span {
+  color: var(--amber);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.preparation-card__details small {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preparation-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #302b22;
+}
+
+.preparation-progress span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: var(--amber);
+  transition: width 180ms ease;
+}
+
+.preparation-card--ready .preparation-progress span {
+  background: var(--green);
+}
+
+.failed-tracks {
+  border-top: 1px solid #4a382c;
+}
+
+.failed-tracks summary {
+  padding-top: 11px;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.failed-tracks__list {
+  max-height: 220px;
+  margin-top: 10px;
+  overflow: auto;
+  border: 1px solid #573735;
+  border-radius: 5px;
+  background: #160f0f;
+}
+
+.failed-tracks__list > div {
+  min-height: 50px;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr);
+  align-items: center;
+  gap: 16px;
+  padding: 8px 10px;
+  border-top: 1px solid #342423;
+}
+
+.failed-tracks__list > div:first-child {
+  border-top: 0;
+}
+
+.failed-tracks__list span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.failed-tracks__list strong,
+.failed-tracks__list small,
+.failed-tracks__list em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.failed-tracks__list strong {
+  color: var(--cream);
+  font-size: 11px;
+}
+
+.failed-tracks__list small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.failed-tracks__list em {
+  color: #d6918a;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.failed-tracks > p {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .file-button {
   position: relative;
   overflow: hidden;
@@ -945,6 +1167,41 @@ a {
 .host-cue__source em {
   color: var(--danger);
   font-size: 10px;
+}
+
+.hosted-cue {
+  border-color: #315875;
+  background: #11181d;
+}
+
+.hosted-cue .eyebrow,
+.hosted-cue small {
+  color: var(--blue);
+}
+
+.hosted-cue__readiness em {
+  color: var(--amber);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.hosted-cue__readiness em.is-ready {
+  color: var(--green);
+}
+
+.audio-ready-label {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.audio-ready-label svg {
+  width: 18px;
+  height: 18px;
 }
 
 .host-cue__controls {

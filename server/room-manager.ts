@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type {
   AvatarKey,
+  DeckPreparationSnapshot,
   GamePlayer,
   PlayerProfile,
   PlaybackSnapshot,
@@ -20,6 +21,9 @@ export interface RoomSession {
   id: string;
   profile: PlayerProfile | null;
   roomCode: string | null;
+  spotify?: {
+    displayName: string | null;
+  } | null;
 }
 
 export interface SessionLookup {
@@ -39,9 +43,11 @@ interface RoomPlayer {
 
 interface RoomDeck {
   name: string;
-  source: "upload" | "demo";
+  source: "upload" | "demo" | "spotify";
   tracks: Track[];
   loadedAt: number;
+  importId: string | null;
+  preparation: DeckPreparationSnapshot | null;
 }
 
 interface Room {
@@ -92,6 +98,9 @@ function cloneTrackForReview(track: Track): Track {
     originalYear: track.originalYear,
     coverUrl: track.coverUrl,
     audioCue: track.audioCue,
+    durationMs: track.durationMs ?? null,
+    isrc: track.isrc ?? null,
+    spotifyUrl: track.spotifyUrl ?? null,
   };
 }
 
@@ -124,9 +133,11 @@ export class RoomManager {
   readonly #deckSize: number;
   readonly #winningTimelineSize: number;
   readonly #demoMode: boolean;
+  readonly #spotifyConfigured: boolean;
   readonly #random: () => number;
   readonly #timers = new Map<string, ReturnType<typeof setTimeout>>();
   #onChange: (code: string) => void | Promise<void> = () => {};
+  #onMediaRelease: (code: string) => void | Promise<void> = () => {};
 
   constructor({
     sessions,
@@ -134,6 +145,7 @@ export class RoomManager {
     deckSize,
     winningTimelineSize,
     demoMode,
+    spotifyConfigured = false,
     random = Math.random,
   }: {
     sessions: SessionLookup;
@@ -141,6 +153,7 @@ export class RoomManager {
     deckSize: number;
     winningTimelineSize: number;
     demoMode: boolean;
+    spotifyConfigured?: boolean;
     random?: () => number;
   }) {
     this.#sessions = sessions;
@@ -148,6 +161,7 @@ export class RoomManager {
     this.#deckSize = deckSize;
     this.#winningTimelineSize = winningTimelineSize;
     this.#demoMode = demoMode;
+    this.#spotifyConfigured = spotifyConfigured;
     this.#random = random;
   }
 
@@ -155,8 +169,18 @@ export class RoomManager {
     this.#onChange = listener;
   }
 
+  setOnMediaRelease(
+    listener: (code: string) => void | Promise<void>,
+  ): void {
+    this.#onMediaRelease = listener;
+  }
+
   #notify(code: string): void {
     Promise.resolve(this.#onChange(code)).catch(() => {});
+  }
+
+  #releaseMedia(code: string): void {
+    Promise.resolve(this.#onMediaRelease(code)).catch(() => {});
   }
 
   #session(sessionId: string): RoomSession {
@@ -236,6 +260,10 @@ export class RoomManager {
         status: "ready",
         cueVersion: 0,
         changedAt: Date.now(),
+        roundNumber: 0,
+        startAt: null,
+        positionMs: 0,
+        readyPlayerIds: [],
       },
       rematchNumber: 0,
     };
@@ -312,7 +340,10 @@ export class RoomManager {
       source: "upload",
       tracks,
       loadedAt: Date.now(),
+      importId: null,
+      preparation: null,
     };
+    this.#releaseMedia(room.code);
   }
 
   #useDemoDeck(room: Room, sessionId: string): void {
@@ -328,7 +359,10 @@ export class RoomManager {
       source: "demo",
       tracks: createDemoDeck(),
       loadedAt: Date.now(),
+      importId: null,
+      preparation: null,
     };
+    this.#releaseMedia(room.code);
   }
 
   #overrideYear(room: Room, sessionId: string, payload: Payload): void {
@@ -385,6 +419,10 @@ export class RoomManager {
       status: "ready",
       cueVersion: 0,
       changedAt: Date.now(),
+      roundNumber: room.game.snapshot().roundNumber,
+      startAt: null,
+      positionMs: 0,
+      readyPlayerIds: [],
     };
   }
 
@@ -399,6 +437,7 @@ export class RoomManager {
 
     if (room.players.size === 0) {
       this.#rooms.delete(room.code);
+      this.#releaseMedia(room.code);
       return;
     }
 
@@ -417,6 +456,19 @@ export class RoomManager {
       throw new RoomError("There is no active game.", "NO_ACTIVE_GAME");
     }
     return room.game;
+  }
+
+  #pausePlayback(room: Room): void {
+    if (room.playback.status === "playing" && room.playback.startAt != null) {
+      room.playback.positionMs += Math.max(
+        0,
+        Date.now() - room.playback.startAt,
+      );
+    }
+    room.playback.status = "paused";
+    room.playback.startAt = null;
+    room.playback.cueVersion += 1;
+    room.playback.changedAt = Date.now();
   }
 
   #command(sessionId: string, payload: Payload): RoomActionResult {
@@ -442,21 +494,59 @@ export class RoomManager {
         game.selectGap(sessionId, Number(commandPayload.gapIndex));
         break;
       }
+      case "audioReady": {
+        const game = this.#activeGame(room);
+        if (room.deck?.source !== "spotify") {
+          throw new RoomError(
+            "This room does not use hosted audio.",
+            "AUDIO_NOT_HOSTED",
+          );
+        }
+        const roundNumber = Number(commandPayload.roundNumber);
+        if (
+          game.phase !== "listening" ||
+          roundNumber !== room.playback.roundNumber
+        ) {
+          throw new RoomError(
+            "That audio round is no longer active.",
+            "AUDIO_ROUND_CHANGED",
+          );
+        }
+        if (!room.playback.readyPlayerIds.includes(sessionId)) {
+          room.playback.readyPlayerIds.push(sessionId);
+        }
+        room.playback.changedAt = Date.now();
+        break;
+      }
       case "playCue":
       case "restartCue":
         this.#assertHost(room, sessionId);
         if (this.#activeGame(room).phase !== "listening") {
           throw new RoomError("There is no mystery track to start.");
         }
+        if (
+          room.deck?.source === "spotify" &&
+          [...room.players.values()].some(
+            (player) =>
+              player.connected &&
+              !room.playback.readyPlayerIds.includes(player.id),
+          )
+        ) {
+          throw new RoomError(
+            "Wait for every connected player to finish loading the audio.",
+            "AUDIO_NOT_READY",
+          );
+        }
+        if (command === "restartCue") room.playback.positionMs = 0;
         room.playback.status = "playing";
         room.playback.cueVersion += 1;
         room.playback.changedAt = Date.now();
+        room.playback.startAt = Date.now() + 1_500;
         break;
       case "pauseCue":
         this.#assertHost(room, sessionId);
         this.#activeGame(room);
-        room.playback.status = "paused";
-        room.playback.changedAt = Date.now();
+        this.#pausePlayback(room);
         break;
       case "lockIn": {
         const game = this.#activeGame(room);
@@ -466,16 +556,22 @@ export class RoomManager {
           );
         }
         game.reveal(sessionId);
-        room.playback.status = "paused";
-        room.playback.changedAt = Date.now();
+        this.#pausePlayback(room);
         if (game.status === "finished") room.status = "finished";
         break;
       }
       case "nextRound": {
         const game = this.#activeGame(room);
         game.nextRound(sessionId, room.hostId);
-        room.playback.status = "ready";
-        room.playback.changedAt = Date.now();
+        room.playback = {
+          status: "ready",
+          cueVersion: room.playback.cueVersion + 1,
+          changedAt: Date.now(),
+          roundNumber: game.snapshot().roundNumber,
+          startAt: null,
+          positionMs: 0,
+          readyPlayerIds: [],
+        };
         if (game.status === "finished") room.status = "finished";
         break;
       }
@@ -483,8 +579,7 @@ export class RoomManager {
         this.#assertHost(room, sessionId);
         this.#activeGame(room).finish();
         room.status = "finished";
-        room.playback.status = "paused";
-        room.playback.changedAt = Date.now();
+        this.#pausePlayback(room);
         break;
       case "rematch":
         this.#assertHost(room, sessionId);
@@ -497,8 +592,15 @@ export class RoomManager {
         room.locked = true;
         room.game = null;
         room.rematchNumber += 1;
-        room.playback.status = "ready";
-        room.playback.changedAt = Date.now();
+        room.playback = {
+          status: "ready",
+          cueVersion: room.playback.cueVersion + 1,
+          changedAt: Date.now(),
+          roundNumber: 0,
+          startAt: null,
+          positionMs: 0,
+          readyPlayerIds: [],
+        };
         break;
       case "leaveRoom":
         this.#removePlayer(room, sessionId);
@@ -563,6 +665,9 @@ export class RoomManager {
 
     player.connected = false;
     player.disconnectedAt = Date.now();
+    room.playback.readyPlayerIds = room.playback.readyPlayerIds.filter(
+      (playerId) => playerId !== sessionId,
+    );
     const timerKey = `${room.code}:${sessionId}`;
     const timer = setTimeout(() => {
       this.#timers.delete(timerKey);
@@ -608,12 +713,23 @@ export class RoomManager {
         active: player.id === game?.activePlayerId,
         score: game?.scores[player.id] ?? 0,
       })),
+      spotify: {
+        configured: this.#spotifyConfigured,
+        connected: Boolean(this.#sessions.get(viewerId)?.spotify),
+        displayName:
+          this.#sessions.get(viewerId)?.spotify?.displayName ?? null,
+      },
       deck: room.deck
         ? {
             name: room.deck.name,
             source: room.deck.source,
+            audioMode:
+              room.deck.source === "spotify" ? "hosted" : "external",
             trackCount: room.deck.tracks.length,
             ready: room.deck.tracks.length >= this.#deckSize,
+            preparation: room.deck.preparation
+              ? structuredClone(room.deck.preparation)
+              : null,
           }
         : null,
       deckReview:
@@ -622,7 +738,10 @@ export class RoomManager {
           : null,
       playback: structuredClone(room.playback),
       hostCue:
-        isHost && room.status === "playing" && currentTrack
+        isHost &&
+        room.status === "playing" &&
+        room.deck?.source !== "spotify" &&
+        currentTrack
           ? cloneTrackForReview(currentTrack)
           : null,
       game,
@@ -631,5 +750,175 @@ export class RoomManager {
 
   roomCodeForSession(sessionId: string): string | null {
     return this.#sessions.get(sessionId)?.roomCode ?? null;
+  }
+
+  assertHostLobby(code: string, sessionId: string): void {
+    const { room } = this.#membership(sessionId, code);
+    this.#assertHost(room, sessionId);
+    if (room.status !== "lobby") {
+      throw new RoomError("Spotify playlists can only be loaded in the lobby.");
+    }
+  }
+
+  beginSpotifyDeck({
+    code,
+    sessionId,
+    name,
+    total,
+  }: {
+    code: string;
+    sessionId: string;
+    name: string;
+    total: number;
+  }): string {
+    this.assertHostLobby(code, sessionId);
+    const room = this.#room(code);
+    const importId = randomBytes(16).toString("hex");
+    room.deck = {
+      name: name.trim().slice(0, 64) || "Spotify playlist",
+      source: "spotify",
+      tracks: [],
+      loadedAt: Date.now(),
+      importId,
+      preparation: {
+        status: "processing",
+        total,
+        processed: 0,
+        readyCount: 0,
+        failedCount: 0,
+        failures: [],
+        currentTitle: null,
+        message: "Matching Spotify tracks with YouTube audio…",
+      },
+    };
+    this.#notify(room.code);
+    return importId;
+  }
+
+  recordSpotifyPreparation({
+    code,
+    importId,
+    track,
+    error,
+  }: {
+    code: string;
+    importId: string;
+    track: Track;
+    error: string | null;
+  }): boolean {
+    const room = this.#rooms.get(cleanCode(code));
+    if (
+      !room?.deck ||
+      room.deck.source !== "spotify" ||
+      room.deck.importId !== importId ||
+      !room.deck.preparation
+    ) {
+      return false;
+    }
+    room.deck.preparation.processed += 1;
+    room.deck.preparation.currentTitle = track.title;
+    if (error) {
+      room.deck.preparation.failedCount += 1;
+      room.deck.preparation.failures.push({
+        id: track.id,
+        title: track.title,
+        artist: track.artist,
+        reason: error,
+      });
+      room.deck.preparation.message = `Skipped “${track.title}”: ${error}`;
+    } else if (!room.deck.tracks.some((item) => item.id === track.id)) {
+      room.deck.tracks.push(structuredClone(track));
+      room.deck.preparation.readyCount = room.deck.tracks.length;
+      room.deck.preparation.message =
+        room.deck.tracks.length >= this.#deckSize
+          ? "Enough tracks are ready. You can start now."
+          : "Preparing temporary MP3 files…";
+    }
+    this.#notify(room.code);
+    return true;
+  }
+
+  completeSpotifyPreparation({
+    code,
+    importId,
+  }: {
+    code: string;
+    importId: string;
+  }): boolean {
+    const room = this.#rooms.get(cleanCode(code));
+    if (
+      !room?.deck ||
+      room.deck.source !== "spotify" ||
+      room.deck.importId !== importId ||
+      !room.deck.preparation
+    ) {
+      return false;
+    }
+    const enoughTracks = room.deck.tracks.length >= this.#deckSize;
+    room.deck.preparation.status = enoughTracks ? "ready" : "failed";
+    room.deck.preparation.currentTitle = null;
+    room.deck.preparation.readyCount = room.deck.tracks.length;
+    room.deck.preparation.message = enoughTracks
+      ? `${room.deck.tracks.length} tracks are ready for this room.`
+      : `Only ${room.deck.tracks.length} tracks could be prepared; ${this.#deckSize} are required.`;
+    this.#notify(room.code);
+    return true;
+  }
+
+  failSpotifyPreparation({
+    code,
+    importId,
+    message,
+  }: {
+    code: string;
+    importId: string;
+    message: string;
+  }): boolean {
+    const room = this.#rooms.get(cleanCode(code));
+    if (
+      !room?.deck ||
+      room.deck.source !== "spotify" ||
+      room.deck.importId !== importId ||
+      !room.deck.preparation
+    ) {
+      return false;
+    }
+    room.deck.preparation.status = "failed";
+    room.deck.preparation.currentTitle = null;
+    room.deck.preparation.message = message.slice(0, 280);
+    this.#notify(room.code);
+    return true;
+  }
+
+  hostedTrackForRound({
+    code,
+    sessionId,
+    roundNumber,
+  }: {
+    code: string;
+    sessionId: string;
+    roundNumber: number;
+  }): { trackId: string } {
+    const { room } = this.#membership(sessionId, code);
+    if (room.deck?.source !== "spotify" || !room.game) {
+      throw new RoomError(
+        "This room does not have hosted audio.",
+        "AUDIO_NOT_HOSTED",
+      );
+    }
+    if (
+      room.status !== "playing" ||
+      room.playback.roundNumber !== roundNumber
+    ) {
+      throw new RoomError(
+        "That audio round is no longer active.",
+        "AUDIO_ROUND_CHANGED",
+      );
+    }
+    const track = room.game.currentTrack;
+    if (!track) {
+      throw new RoomError("The current audio is unavailable.", "AUDIO_MISSING");
+    }
+    return { trackId: track.id };
   }
 }
