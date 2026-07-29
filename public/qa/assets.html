@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Music Timeline asset review</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 32px;
+        color: #f4ead2;
+        background: #0d0f0f;
+        font: 15px system-ui, sans-serif;
+      }
+
+      h1 {
+        margin-top: 0;
+      }
+
+      section {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 24px;
+        margin-bottom: 40px;
+      }
+
+      figure {
+        margin: 0;
+      }
+
+      img {
+        width: 100%;
+        aspect-ratio: 1;
+        display: block;
+        object-fit: cover;
+        border: 1px solid #534d43;
+      }
+
+      .avatar {
+        border-radius: 50%;
+      }
+
+      figcaption {
+        margin-top: 8px;
+        color: #aaa397;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Portraits</h1>
+    <section>
+      <figure><img class="avatar" src="/assets/avatars/maya.png" /><figcaption>Maya</figcaption></figure>
+      <figure><img class="avatar" src="/assets/avatars/leo.png" /><figcaption>Leo</figcaption></figure>
+      <figure><img class="avatar" src="/assets/avatars/sofia.png" /><figcaption>Sofia</figcaption></figure>
+      <figure><img class="avatar" src="/assets/avatars/ben.png" /><figcaption>Ben</figcaption></figure>
+      <figure><img class="avatar" src="/assets/avatars/nora.png" /><figcaption>Nora</figcaption></figure>
+    </section>
+    <h1>Record artwork</h1>
+    <section>
+      <figure><img src="/assets/covers/cover-1977.png" /><figcaption>1977</figcaption></figure>
+      <figure><img src="/assets/covers/cover-1984.png" /><figcaption>1984</figcaption></figure>
+      <figure><img src="/assets/covers/cover-1999.png" /><figcaption>1999</figcaption></figure>
+      <figure><img src="/assets/covers/cover-2013.png" /><figcaption>2013</figcaption></figure>
+    </section>
+  </body>
+</html>

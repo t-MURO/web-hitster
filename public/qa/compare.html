@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Music Timeline — Visual QA</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 18px;
+        color: #f4ead2;
+        background: #080a0a;
+        font: 14px/1.4 Inter, system-ui, sans-serif;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 20px;
+      }
+
+      h2 {
+        margin-top: 14px;
+        color: #e9a33d;
+        font-size: 14px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .note {
+        margin-top: 6px;
+        color: #99958c;
+      }
+
+      .comparison {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        margin-top: 8px;
+      }
+
+      figure {
+        min-width: 0;
+        margin: 0;
+      }
+
+      figcaption {
+        margin-bottom: 6px;
+        color: #cac3b5;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .full-view,
+      .focus-view {
+        width: 100%;
+        border: 1px solid #484940;
+        background: #0d0f0f;
+      }
+
+      .full-view {
+        display: block;
+      }
+
+      .focus-view {
+        position: relative;
+        aspect-ratio: 2.6 / 1;
+        overflow: hidden;
+      }
+
+      .focus-view img {
+        position: absolute;
+        top: -10.8%;
+        left: 0;
+        width: 100%;
+        height: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Music Timeline — source / implementation comparison</h1>
+    <p class="note">Desktop listening state, full composition and main-turn focus.</p>
+
+    <h2>Full view</h2>
+    <div class="comparison">
+      <figure>
+        <figcaption>Selected reference · 1487 × 1058</figcaption>
+        <img class="full-view" src="/qa/reference.png" alt="Selected design reference" />
+      </figure>
+      <figure>
+        <figcaption>Implementation · 1440 × 1024</figcaption>
+        <img
+          class="full-view"
+          src="/qa/implementation-listening-full.png"
+          alt="Current prototype implementation"
+        />
+      </figure>
+    </div>
+
+    <h2>Main-turn focus</h2>
+    <div class="comparison">
+      <figure>
+        <figcaption>Selected reference</figcaption>
+        <div class="focus-view">
+          <img src="/qa/reference.png" alt="Reference main-turn region" />
+        </div>
+      </figure>
+      <figure>
+        <figcaption>Implementation</figcaption>
+        <div class="focus-view">
+          <img
+            src="/qa/implementation-listening-full.png"
+            alt="Implementation main-turn region"
+          />
+        </div>
+      </figure>
+    </div>
+  </body>
+</html>
