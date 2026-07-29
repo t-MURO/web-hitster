@@ -19,7 +19,9 @@ There is a second conflict with the blind-play mechanic. Spotify expressly defin
 - A 2026-07-23 update increased the number of Development Mode Client IDs from one to 25 per developer, but all of those apps now share one developer-account quota. This supersedes the older "one Client ID" statement in the February migration guide; it does **not** change the five-user cap per app. [July 2026 quota update](https://developer.spotify.com/blog/2026-07-23-web-api-quota-updates).
 - Extended quota is not a realistic escape hatch for this private project. Since 2025-05-15, Spotify accepts applications only from organizations, and its published criteria include an established entity, a launched service, at least 250,000 monthly active users, key-market availability, commercial viability, and policy compliance. [Quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes) and [2025 extended-access announcement](https://developer.spotify.com/blog/2025-04-15-updating-the-criteria-for-web-api-extended-access).
 
-The proposed 2–5-player fixed friend group fits the numeric Development Mode cap exactly, but it does not cure the policy prohibition.
+The current 2–10-player room uses Spotify only through the host's authorized
+account, so the Development Mode user cap applies to authorized hosts rather
+than every room participant. This does not cure the policy prohibition.
 
 ## OAuth and redirect URIs
 

@@ -539,7 +539,7 @@ a {
   z-index: 3;
   min-height: 90px;
   display: grid;
-  grid-template-columns: repeat(var(--player-count), minmax(0, 1fr));
+  grid-template-columns: repeat(var(--player-columns), minmax(0, 1fr));
   border: 1px solid #565750;
   border-top: 0;
   border-bottom-color: var(--line);
@@ -561,12 +561,25 @@ a {
   border-left: 0;
 }
 
+.player-chip:nth-child(5n + 1) {
+  border-left: 0;
+}
+
+.player-chip:nth-child(n + 6) {
+  border-top: 1px solid var(--line);
+}
+
 .player-chip--active {
   margin: 7px 12px;
   padding-inline: 12px;
   border: 1px solid var(--amber-dark);
   border-radius: 8px;
   background: #181816;
+}
+
+.player-chip--pending {
+  background: #211a12;
+  box-shadow: inset 0 0 0 1px #76552b;
 }
 
 .avatar {
@@ -647,6 +660,45 @@ a {
   color: var(--amber);
   font-size: 9px;
   letter-spacing: 0.05em;
+}
+
+.active-score-label,
+.challenge-response {
+  width: fit-content;
+  display: flex;
+  align-items: center;
+  margin-top: 4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.active-score-label {
+  color: #111;
+  background: var(--amber);
+}
+
+.challenge-response--locked {
+  color: var(--amber);
+  background: #342817;
+}
+
+.challenge-response--pending {
+  color: #ffd397;
+  background: #5a3d19;
+}
+
+.challenge-response--challenged {
+  color: #ead7ff;
+  background: #3b264c;
+}
+
+.challenge-response--passed {
+  color: var(--green);
+  background: #1e3726;
 }
 
 .token-label i {
@@ -1761,6 +1813,12 @@ a {
   box-shadow: 0 8px 22px rgb(0 0 0 / 30%);
 }
 
+.year-card--same-year {
+  margin-left: -8px;
+  border-left-color: var(--amber-dark);
+  box-shadow: -4px 0 0 #252117, 0 8px 22px rgb(0 0 0 / 30%);
+}
+
 .year-card__year {
   height: 57px;
   display: grid;
@@ -2105,6 +2163,11 @@ a {
   border: 1px solid #676056;
   border-radius: 3px;
   background: #222;
+}
+
+.mini-cover--same-year {
+  margin-left: -22px;
+  border-left-color: var(--amber-dark);
 }
 
 .mini-cover img {

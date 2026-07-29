@@ -9,6 +9,7 @@ import type {
   RoomSnapshot,
   Track,
 } from "../shared/types.js";
+import { MAX_PLAYERS } from "../shared/types.js";
 import { createDemoDeck, DeckError, parseDeck } from "./deck-parser.js";
 import { GameRuleError, TimelineGame } from "./game-engine.js";
 
@@ -135,6 +136,10 @@ export class RoomManager {
   readonly #spotifyConfigured: boolean;
   readonly #random: () => number;
   readonly #timers = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly #challengeTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   #onChange: (code: string) => void | Promise<void> = () => {};
   #onMediaRelease: (code: string) => void | Promise<void> = () => {};
 
@@ -180,6 +185,53 @@ export class RoomManager {
 
   #releaseMedia(code: string): void {
     Promise.resolve(this.#onMediaRelease(code)).catch(() => {});
+  }
+
+  #clearChallengeTimer(code: string): void {
+    const timer = this.#challengeTimers.get(code);
+    if (timer) clearTimeout(timer);
+    this.#challengeTimers.delete(code);
+  }
+
+  #scheduleChallengeTimer(room: Room): void {
+    this.#clearChallengeTimer(room.code);
+    const snapshot = room.game?.snapshot();
+    const deadline = snapshot?.current?.challengeDeadline;
+    if (
+      snapshot?.current?.phase !== "challenging" ||
+      deadline == null
+    ) {
+      return;
+    }
+    const roundNumber = snapshot.roundNumber;
+    const expire = () => {
+      const currentRoom = this.#rooms.get(room.code);
+      const currentGame = currentRoom?.game;
+      const currentSnapshot = currentGame?.snapshot();
+      if (
+        !currentRoom ||
+        !currentGame ||
+        currentSnapshot?.roundNumber !== roundNumber ||
+        currentSnapshot.current?.phase !== "challenging"
+      ) {
+        this.#challengeTimers.delete(room.code);
+        return;
+      }
+      const currentDeadline = currentSnapshot.current.challengeDeadline;
+      if (currentDeadline != null && currentDeadline > Date.now()) {
+        const nextTimer = setTimeout(expire, currentDeadline - Date.now());
+        nextTimer.unref?.();
+        this.#challengeTimers.set(room.code, nextTimer);
+        return;
+      }
+      this.#challengeTimers.delete(room.code);
+      if (currentGame.expireChallengeWindow()) {
+        this.#notify(room.code);
+      }
+    };
+    const timer = setTimeout(expire, Math.max(0, deadline - Date.now()));
+    timer.unref?.();
+    this.#challengeTimers.set(room.code, timer);
   }
 
   #session(sessionId: string): RoomSession {
@@ -297,8 +349,11 @@ export class RoomManager {
         "ROOM_LOCKED",
       );
     }
-    if (room.players.size >= 5) {
-      throw new RoomError("This room already has five players.", "ROOM_FULL");
+    if (room.players.size >= MAX_PLAYERS) {
+      throw new RoomError(
+        `This room already has ${MAX_PLAYERS} players.`,
+        "ROOM_FULL",
+      );
     }
 
     const player = playerFromSession(session);
@@ -424,10 +479,17 @@ export class RoomManager {
 
     room.players.delete(sessionId);
     room.game?.removePlayer(sessionId);
+    if (
+      room.game?.phase !== "challenging" ||
+      room.game?.status === "finished"
+    ) {
+      this.#clearChallengeTimer(room.code);
+    }
     const session = this.#sessions.get(sessionId);
     if (session) session.roomCode = null;
 
     if (room.players.size === 0) {
+      this.#clearChallengeTimer(room.code);
       this.#rooms.delete(room.code);
       this.#releaseMedia(room.code);
       return;
@@ -451,6 +513,7 @@ export class RoomManager {
   }
 
   #resetRoundPlayback(room: Room, cueVersion: number): void {
+    this.#clearChallengeTimer(room.code);
     const game = this.#activeGame(room);
     room.playback = {
       status: "ready",
@@ -585,6 +648,7 @@ export class RoomManager {
           );
         }
         game.lockPlacement(sessionId);
+        this.#scheduleChallengeTimer(room);
         break;
       }
       case "challengeGap": {
@@ -606,6 +670,7 @@ export class RoomManager {
             .filter((player) => player.connected)
             .map((player) => player.id),
         );
+        this.#clearChallengeTimer(room.code);
         this.#pausePlayback(room);
         if (game.status === "finished") room.status = "finished";
         break;
@@ -620,6 +685,7 @@ export class RoomManager {
       case "endGame":
         this.#assertHost(room, sessionId);
         this.#activeGame(room).finish();
+        this.#clearChallengeTimer(room.code);
         room.status = "finished";
         this.#pausePlayback(room);
         break;
@@ -633,6 +699,7 @@ export class RoomManager {
         room.status = "lobby";
         room.locked = true;
         room.game = null;
+        this.#clearChallengeTimer(room.code);
         room.rematchNumber += 1;
         room.playback = {
           status: "ready",

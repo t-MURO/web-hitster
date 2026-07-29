@@ -8,10 +8,16 @@ import type {
   RoundOutcome,
   Track,
 } from "../shared/types.js";
+import {
+  CHALLENGE_WINDOW_MS,
+  MAX_PLAYERS,
+  MIN_PLAYERS,
+} from "../shared/types.js";
 
 interface CurrentRound {
   track: Track;
   phase: GamePhase;
+  challengeDeadline: number | null;
   selectedGap: number;
   challenges: RoundChallengeSnapshot[];
   challengePasses: Set<string>;
@@ -52,7 +58,32 @@ function publicTrack(track: Track): PublicTrack {
 }
 
 function defaultGap(timeline: readonly Track[]): number {
-  return Math.ceil(timeline.length / 2);
+  const center = Math.ceil(timeline.length / 2);
+  for (let distance = 0; distance <= timeline.length; distance += 1) {
+    const laterGap = center + distance;
+    if (isSelectableGap(timeline, laterGap)) return laterGap;
+    const earlierGap = center - distance;
+    if (distance > 0 && isSelectableGap(timeline, earlierGap)) {
+      return earlierGap;
+    }
+  }
+  return 0;
+}
+
+function isSelectableGap(
+  timeline: readonly Track[],
+  gapIndex: number,
+): boolean {
+  if (
+    !Number.isInteger(gapIndex) ||
+    gapIndex < 0 ||
+    gapIndex > timeline.length
+  ) {
+    return false;
+  }
+  const previousYear = timeline[gapIndex - 1]?.year;
+  const nextYear = timeline[gapIndex]?.year;
+  return previousYear == null || nextYear == null || previousYear !== nextYear;
 }
 
 function gapBounds(
@@ -91,24 +122,24 @@ function normalizedAnswer(value: string): string {
     .replace(/\s+/g, " ");
 }
 
-function baseTitle(value: string): string {
-  return normalizedAnswer(value.replace(/\s*[\[(].*?[\])]\s*$/g, ""));
+function titleMatches(guess: string, answer: string): boolean {
+  return normalizedAnswer(guess) === normalizedAnswer(answer);
 }
 
-function titleMatches(guess: string, answer: string): boolean {
-  const normalizedGuess = normalizedAnswer(guess);
+function primaryArtist(value: string): string {
   return (
-    normalizedGuess === normalizedAnswer(answer) ||
-    normalizedGuess === baseTitle(answer)
+    value.split(/\s*(?:,|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b)\s*/i)[0] ??
+    value
   );
 }
 
 function artistMatches(guess: string, answer: string): boolean {
   const normalizedGuess = normalizedAnswer(guess);
-  if (normalizedGuess === normalizedAnswer(answer)) return true;
-  return answer
-    .split(/\s*(?:,|&|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b)\s*/i)
-    .some((artist) => normalizedAnswer(artist) === normalizedGuess);
+  return (
+    normalizedGuess === normalizedAnswer(answer) ||
+    normalizedAnswer(primaryArtist(guess)) ===
+      normalizedAnswer(primaryArtist(answer))
+  );
 }
 
 export class TimelineGame {
@@ -144,8 +175,13 @@ export class TimelineGame {
     maximumTrackCount?: number;
     acceptingTracks?: boolean;
   }): TimelineGame {
-    if (players.length < 2 || players.length > 5) {
-      throw new GameRuleError("A game needs between 2 and 5 players.");
+    if (
+      players.length < MIN_PLAYERS ||
+      players.length > MAX_PLAYERS
+    ) {
+      throw new GameRuleError(
+        `A game needs between ${MIN_PLAYERS} and ${MAX_PLAYERS} players.`,
+      );
     }
     if (tracks.length <= players.length) {
       throw new GameRuleError("The deck does not have enough tracks to start.");
@@ -229,6 +265,7 @@ export class TimelineGame {
     this.#current = {
       track,
       phase: "listening",
+      challengeDeadline: null,
       selectedGap: defaultGap(timeline),
       challenges: [],
       challengePasses: new Set(),
@@ -358,11 +395,17 @@ export class TimelineGame {
     }
 
     const timeline = this.#timeline(playerId);
-    if (
-      !Number.isInteger(gapIndex) ||
-      gapIndex < 0 ||
-      gapIndex > timeline.length
-    ) {
+    if (!isSelectableGap(timeline, gapIndex)) {
+      if (
+        Number.isInteger(gapIndex) &&
+        gapIndex > 0 &&
+        gapIndex < timeline.length &&
+        timeline[gapIndex - 1]?.year === timeline[gapIndex]?.year
+      ) {
+        throw new GameRuleError(
+          "Cards from the same year stay grouped. Choose before or after the group.",
+        );
+      }
       throw new GameRuleError("That timeline position does not exist.");
     }
     this.#current.selectedGap = gapIndex;
@@ -376,12 +419,46 @@ export class TimelineGame {
       throw new GameRuleError("Only the active player can lock in.");
     }
     this.#current.phase = "challenging";
+    this.#current.challengeDeadline = Date.now() + CHALLENGE_WINDOW_MS;
+  }
+
+  expireChallengeWindow(now = Date.now()): boolean {
+    if (
+      this.#status !== "playing" ||
+      this.#current?.phase !== "challenging" ||
+      this.#current.challengeDeadline == null ||
+      now < this.#current.challengeDeadline
+    ) {
+      return false;
+    }
+    for (const playerId of this.#turnOrder) {
+      if (
+        playerId !== this.activePlayerId &&
+        !this.#current.challenges.some(
+          (challenge) => challenge.playerId === playerId,
+        )
+      ) {
+        this.#current.challengePasses.add(playerId);
+      }
+    }
+    this.#current.challengeDeadline = null;
+    return true;
+  }
+
+  #assertChallengeWindowOpen(): void {
+    if (this.expireChallengeWindow()) {
+      throw new GameRuleError("The 15-second challenge window has closed.");
+    }
+    if (this.#current?.challengeDeadline == null) {
+      throw new GameRuleError("The challenge window has closed.");
+    }
   }
 
   challengeGap(playerId: string, gapIndex: number): void {
     if (this.#status !== "playing" || this.#current?.phase !== "challenging") {
       throw new GameRuleError("Challenges are not open right now.");
     }
+    this.#assertChallengeWindowOpen();
     if (playerId === this.activePlayerId) {
       throw new GameRuleError("You cannot challenge your own placement.");
     }
@@ -390,11 +467,17 @@ export class TimelineGame {
     }
 
     const timeline = this.#timeline(this.activePlayerId);
-    if (
-      !Number.isInteger(gapIndex) ||
-      gapIndex < 0 ||
-      gapIndex > timeline.length
-    ) {
+    if (!isSelectableGap(timeline, gapIndex)) {
+      if (
+        Number.isInteger(gapIndex) &&
+        gapIndex > 0 &&
+        gapIndex < timeline.length &&
+        timeline[gapIndex - 1]?.year === timeline[gapIndex]?.year
+      ) {
+        throw new GameRuleError(
+          "Cards from the same year stay grouped. Choose before or after the group.",
+        );
+      }
       throw new GameRuleError("That timeline position does not exist.");
     }
     if (gapIndex === this.#current.selectedGap) {
@@ -437,6 +520,7 @@ export class TimelineGame {
     if (this.#status !== "playing" || this.#current?.phase !== "challenging") {
       throw new GameRuleError("Challenges are not open right now.");
     }
+    this.#assertChallengeWindowOpen();
     if (playerId === this.activePlayerId) {
       throw new GameRuleError("The active player cannot pass for opponents.");
     }
@@ -467,6 +551,7 @@ export class TimelineGame {
     if (this.#current.phase !== "challenging") {
       throw new GameRuleError("This round cannot be revealed now.");
     }
+    this.expireChallengeWindow();
     if (playerId !== this.activePlayerId && playerId !== hostId) {
       throw new GameRuleError("Only the active player or host can reveal.");
     }
@@ -528,6 +613,7 @@ export class TimelineGame {
     }
 
     this.#current.phase = "revealed";
+    this.#current.challengeDeadline = null;
     this.#current.outcome = {
       resolution: "placement",
       correct,
@@ -594,6 +680,7 @@ export class TimelineGame {
 
     if (removedActivePlayer && this.#current) {
       this.#current.phase = "listening";
+      this.#current.challengeDeadline = null;
       this.#current.challenges = [];
       this.#current.challengePasses.clear();
       this.#current.guess = null;
@@ -620,6 +707,7 @@ export class TimelineGame {
         ? null
         : {
             phase: this.#current.phase,
+            challengeDeadline: this.#current.challengeDeadline,
             selectedGap: this.#current.selectedGap,
             challenges: structuredClone(this.#current.challenges),
             challengePasses: [...this.#current.challengePasses],

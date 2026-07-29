@@ -41,11 +41,13 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Keep room and deck data ephemeral: no game history, player statistics, or
   persistent database for version one.
 - Follow the Original timeline rules: every player starts with one visible card,
-  the oldest starting card takes the first turn, equal-year placements work on
-  either side, and only completing a ten-card timeline produces a winner.
+  the oldest starting card takes the first turn, equal-year cards stay grouped
+  with placement allowed only before or after the group, and only completing a
+  ten-card timeline produces a winner.
 - Implement the full music-token economy: start with two, spend one to redraw,
   spend one to challenge, trade three for a guaranteed card before listening
   and skip the purchaser's next turn, and earn one for a correct title-and-artist
   guess up to a maximum of five.
-- After lock-in, require every connected opponent to challenge or explicitly
-  pass before the active player or host can reveal.
+- After lock-in, open a server-authoritative 15-second challenge window.
+  Opponents may challenge or pass early; when time expires, unanswered players
+  automatically pass and the active player or host can reveal.

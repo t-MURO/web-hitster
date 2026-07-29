@@ -1,4 +1,7 @@
 export const AVATAR_KEYS = ["maya", "leo", "sofia", "ben", "nora"] as const;
+export const MIN_PLAYERS = 2;
+export const MAX_PLAYERS = 10;
+export const CHALLENGE_WINDOW_MS = 15_000;
 
 export type AvatarKey = (typeof AVATAR_KEYS)[number];
 export type GamePhase = "listening" | "challenging" | "revealed";
@@ -82,6 +85,7 @@ export interface RoundChallengeSnapshot {
 
 export interface CurrentRoundSnapshot {
   phase: GamePhase;
+  challengeDeadline: number | null;
   selectedGap: number;
   challenges: RoundChallengeSnapshot[];
   challengePasses: string[];

@@ -118,7 +118,7 @@ Tunnel FAQ](https://developers.cloudflare.com/cloudflare-one/faq/cloudflare-tunn
 Audio should be served as ordinary authenticated HTTP responses from the same
 origin. Avoid treating the free Cloudflare proxy as an unlimited media CDN;
 Cloudflare warns that disproportionate delivery of large media files on
-Free/Pro/Business plans may trigger action. A five-player private game is small,
+Free/Pro/Business plans may trigger action. A ten-player private game is small,
 but the home uplink and origin should remain the source of truth. [Cloudflare
 media-delivery policy](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/)
 

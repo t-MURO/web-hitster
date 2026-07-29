@@ -47,6 +47,7 @@ import {
   primeRoomAudio,
   useSynchronizedAudio,
 } from "./useSynchronizedAudio.js";
+import { MAX_PLAYERS, MIN_PLAYERS } from "../shared/types.js";
 import type {
   ClientConfig,
   CurrentRoundSnapshot,
@@ -81,6 +82,11 @@ type ActiveGame = GameSnapshot & {
 type ActiveRoom = RoomSnapshot & { game: ActiveGame };
 type FinishedRoom = RoomSnapshot & { game: GameSnapshot };
 type SynchronizedAudioControls = ReturnType<typeof useSynchronizedAudio>;
+type ChallengeResponseState =
+  | "locked"
+  | "pending"
+  | "challenged"
+  | "passed";
 
 function hasGame(room: RoomSnapshot): room is FinishedRoom {
   return room.game !== null;
@@ -562,7 +568,7 @@ function HomeScreen({
         </div>
         <ErrorBanner message={error} onClose={() => setError("")} />
         <p className="privacy-note">
-          Private rooms for 2–5 friends. First to{" "}
+          Private rooms for {MIN_PLAYERS}–{MAX_PLAYERS} friends. First to{" "}
           {config.winningTimelineSize} timeline cards wins.
         </p>
       </section>
@@ -589,41 +595,78 @@ function PlayerAvatar({
 function PlayerStrip({
   players,
   tokens,
+  winningTimelineSize,
+  challengeResponses,
 }: {
   players: RoomPlayerSnapshot[];
   tokens?: Record<string, number>;
+  winningTimelineSize?: number;
+  challengeResponses?: Record<string, ChallengeResponseState>;
 }) {
   return (
     <section
       className="player-strip"
       aria-label="Connected players"
-      style={{ "--player-count": players.length } as CSSProperties}
+      style={{
+        "--player-columns": Math.min(players.length, 5),
+      } as CSSProperties}
     >
-      {players.map((player) => (
-        <div
-          className={`player-chip ${player.active ? "player-chip--active" : ""}`}
-          key={player.id}
-        >
-          <PlayerAvatar player={player} />
-          <div className="player-chip__copy">
-            <div className="player-chip__name-row">
-              <strong>{player.displayName}</strong>
-              {player.host && <Crown weight="fill" aria-label="Host" />}
-              {player.active && <span className="active-tag">Active</span>}
-            </div>
-            <span className={player.connected ? "connected-label" : "connected-label is-offline"}>
-              <Headphones weight="fill" aria-hidden="true" />
-              {player.connected ? "Connected" : "Reconnecting"}
-            </span>
-            {tokens && (
-              <span className="token-label">
-                <i aria-hidden="true" />
-                {tokens[player.id] ?? 0} music tokens
+      {players.map((player) => {
+        const challengeResponse = challengeResponses?.[player.id];
+        return (
+          <div
+            className={`player-chip ${
+              player.active ? "player-chip--active" : ""
+            } ${
+              challengeResponse === "pending" ? "player-chip--pending" : ""
+            }`}
+            key={player.id}
+          >
+            <PlayerAvatar player={player} />
+            <div className="player-chip__copy">
+              <div className="player-chip__name-row">
+                <strong>{player.displayName}</strong>
+                {player.host && <Crown weight="fill" aria-label="Host" />}
+                {player.active && <span className="active-tag">Active</span>}
+              </div>
+              <span
+                className={
+                  player.connected
+                    ? "connected-label"
+                    : "connected-label is-offline"
+                }
+              >
+                <Headphones weight="fill" aria-hidden="true" />
+                {player.connected ? "Connected" : "Reconnecting"}
               </span>
-            )}
+              {tokens && (
+                <span className="token-label">
+                  <i aria-hidden="true" />
+                  {tokens[player.id] ?? 0} music tokens
+                </span>
+              )}
+              {player.active && winningTimelineSize && (
+                <span className="active-score-label">
+                  Score {player.score} / {winningTimelineSize}
+                </span>
+              )}
+              {challengeResponse && (
+                <span
+                  className={`challenge-response challenge-response--${challengeResponse}`}
+                >
+                  {challengeResponse === "locked"
+                    ? "Locked in"
+                    : challengeResponse === "pending"
+                      ? "Challenge pending"
+                      : challengeResponse === "challenged"
+                        ? "Challenge placed"
+                        : "Passed"}
+                </span>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </section>
   );
 }
@@ -761,7 +804,9 @@ function LobbyScreen({
             <div className="panel-title">
               <div>
                 <span className="eyebrow">Players</span>
-                <h2>{room.players.length} of 5 connected</h2>
+                <h2>
+                  {room.players.length} of {MAX_PLAYERS} connected
+                </h2>
               </div>
               <UsersThree aria-hidden="true" />
             </div>
@@ -1121,13 +1166,23 @@ function KnownCard({
   track,
   index,
   mini = false,
+  groupedWithPrevious = false,
 }: {
   track: PublicTrack;
   index: number;
   mini?: boolean;
+  groupedWithPrevious?: boolean;
 }) {
   return (
-    <article className={mini ? "mini-cover" : "year-card"}>
+    <article
+      className={`${mini ? "mini-cover" : "year-card"} ${
+        groupedWithPrevious
+          ? mini
+            ? "mini-cover--same-year"
+            : "year-card--same-year"
+          : ""
+      }`}
+    >
       {!mini && <span className="year-card__year">{track.year}</span>}
       <img src={fallbackCover(track, index)} alt="" />
     </article>
@@ -1201,6 +1256,10 @@ function MainTimeline({
 }) {
   const nodes: ReactNode[] = [];
   for (let index = 0; index <= timeline.length; index += 1) {
+    const groupedYearBoundary =
+      index > 0 &&
+      index < timeline.length &&
+      timeline[index - 1]?.year === timeline[index]?.year;
     const selected =
       game.current.outcome?.resolution !== "token-trade" &&
       game.current.selectedGap === index;
@@ -1219,7 +1278,7 @@ function MainTimeline({
       (selectionMode === "placement" ||
         (selectionMode === "challenge" &&
           (!challenge || challenge.playerId === viewerId)));
-    if (selected && !placedOnActiveTimeline) {
+    if (!groupedYearBoundary && selected && !placedOnActiveTimeline) {
       nodes.push(
         <div className="gap-slot gap-slot--selected" key={`gap-${index}`}>
           <span className="selection-caret" aria-hidden="true" />
@@ -1227,7 +1286,7 @@ function MainTimeline({
           <span className="gap-slot__label">{gapLabel(timeline, index)}</span>
         </div>,
       );
-    } else if (!selected) {
+    } else if (!groupedYearBoundary && !selected) {
       nodes.push(
         <button
           aria-label={
@@ -1261,7 +1320,14 @@ function MainTimeline({
     const track = timeline[index];
     if (track) {
       nodes.push(
-        <KnownCard index={index} key={track.id} track={track} />,
+        <KnownCard
+          groupedWithPrevious={
+            index > 0 && timeline[index - 1]?.year === track.year
+          }
+          index={index}
+          key={track.id}
+          track={track}
+        />,
       );
     }
   }
@@ -1294,12 +1360,19 @@ function PublicTimelines({
             <div className="mini-timeline__rail" aria-label={`${player.displayName}'s timeline`}>
               {timeline.map((track, index) => (
                 <div className="mini-timeline__item" key={track.id}>
-                  {index > 0 && (
+                  {index > 0 && timeline[index - 1]?.year !== track.year && (
                     <span className="mini-gap" aria-hidden="true">
                       <Plus aria-hidden="true" />
                     </span>
                   )}
-                  <KnownCard index={index} mini track={track} />
+                  <KnownCard
+                    groupedWithPrevious={
+                      index > 0 && timeline[index - 1]?.year === track.year
+                    }
+                    index={index}
+                    mini
+                    track={track}
+                  />
                 </div>
               ))}
             </div>
@@ -1560,12 +1633,26 @@ function GameScreen({
   const [busy, setBusy] = useState("");
   const [guessTitle, setGuessTitle] = useState("");
   const [guessArtist, setGuessArtist] = useState("");
+  const [challengeNow, setChallengeNow] = useState(Date.now());
   const synchronizedAudio = useSynchronizedAudio(room, command);
   const game = room.game;
   const activePlayer = room.players.find((player) => player.id === game.activePlayerId);
   const timeline = game.timelines[game.activePlayerId] ?? [];
   const isActive = room.viewerId === game.activePlayerId;
   const challenging = game.current.phase === "challenging";
+  const challengeDeadline = game.current.challengeDeadline;
+  const challengeCurrentTime = Math.max(challengeNow, Date.now());
+  const challengeWindowOpen =
+    challenging &&
+    challengeDeadline != null &&
+    challengeDeadline > challengeCurrentTime;
+  const challengeSeconds =
+    challengeDeadline == null
+      ? 0
+      : Math.max(
+          0,
+          Math.ceil((challengeDeadline - challengeCurrentTime) / 1_000),
+        );
   const revealed = game.current.phase === "revealed";
   const correct = game.current.outcome?.correct;
   const awardedPlayer = game.current.outcome?.awardedPlayerId
@@ -1593,11 +1680,43 @@ function GameScreen({
       ),
   );
   const tokenTrade = game.current.outcome?.resolution === "token-trade";
+  const challengeResponses:
+    | Record<string, ChallengeResponseState>
+    | undefined = challenging
+    ? Object.fromEntries(
+        room.players
+          .filter(
+            (player) =>
+              player.id === game.activePlayerId || player.connected,
+          )
+          .map((player) => {
+            const response: ChallengeResponseState =
+              player.id === game.activePlayerId
+                ? "locked"
+                : game.current.challenges.some(
+                      (challenge) => challenge.playerId === player.id,
+                    )
+                  ? "challenged"
+                  : game.current.challengePasses.includes(player.id)
+                    ? "passed"
+                    : "pending";
+            return [player.id, response];
+          }),
+      )
+    : undefined;
 
   useEffect(() => {
     setGuessTitle("");
     setGuessArtist("");
   }, [game.roundNumber]);
+
+  useEffect(() => {
+    if (!challenging || challengeDeadline == null) return undefined;
+    const updateClock = () => setChallengeNow(Date.now());
+    updateClock();
+    const interval = window.setInterval(updateClock, 250);
+    return () => window.clearInterval(interval);
+  }, [challengeDeadline, challenging]);
 
   async function run(label: string, callback: AsyncCallback) {
     setBusy(label);
@@ -1630,7 +1749,9 @@ function GameScreen({
         ? `${game.current.track?.year ?? "—"} · ${awardedPlayer.displayName} stole it`
         : `${game.current.track?.year ?? "—"} · No correct challenge`
     : challenging
-      ? "Challenges open"
+      ? challengeWindowOpen
+        ? `Challenges open · ${challengeSeconds}s`
+        : "Challenge window closed"
     : synchronizedAudio.hosted && !synchronizedAudio.enabled
       ? "Start audio"
       : synchronizedAudio.hosted && synchronizedAudio.loading
@@ -1644,7 +1765,7 @@ function GameScreen({
         : "Waiting for host";
 
   const canChallenge =
-    challenging &&
+    challengeWindowOpen &&
     !isActive &&
     !viewerPassed &&
     (viewerTokens > 0 || Boolean(viewerChallenge));
@@ -1658,7 +1779,8 @@ function GameScreen({
     isActive &&
     game.current.phase === "listening" &&
     room.playback.status === "playing";
-  const canPass = challenging && !isActive && !viewerResponded;
+  const canPass =
+    challengeWindowOpen && !isActive && !viewerResponded;
   const canReveal =
     challenging &&
     everyOpponentResponded &&
@@ -1714,8 +1836,10 @@ function GameScreen({
         </div>
       </BrandHeader>
       <PlayerStrip
+        challengeResponses={challengeResponses}
         players={room.players}
         tokens={game.tokens}
+        winningTimelineSize={room.rules.winningTimelineSize}
       />
       {game.current.phase === "listening" && (
         <HostCue
@@ -1810,7 +1934,8 @@ function GameScreen({
                       Know the song? Earn a token
                     </label>
                     <span>
-                      Correctly name both before locking in. Maximum five tokens.
+                      Exact title and main artist. Capitalization and featured
+                      artists do not matter.
                     </span>
                   </div>
                   <input
@@ -1962,9 +2087,11 @@ function GameScreen({
                   )}. Select it again to remove it, or choose another gap to move it.`
                 : viewerPassed
                   ? "You passed. Waiting for the other players."
+                : !challengeWindowOpen
+                  ? "Challenge time is over. Waiting for the reveal."
                 : viewerTokens > 0
                   ? "Think it is wrong? Choose a different gap, or pass."
-                  : "You have no music tokens. Pass to continue."}
+                  : "You have no music tokens. Challenge positions are disabled; pass to continue."}
             </span>
           )}
           {challenging && isActive && (
