@@ -15,4 +15,11 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - The hero state is the live desktop round: five connected players, Maya active, a public chronological timeline, a hidden song, selectable insertion gaps, and one dominant `LOCK IN` action.
 - Never show the current mystery song title, artist, or cover before reveal.
 - Keep the interface original. Do not use HITSTER branding, assets, or trade dress.
-- This Product Design pass is desktop-only and frontend-only. Spotify auth, persistence, and real playback coordination belong to the later production implementation.
+- The production implementation is desktop-only and provider-neutral. It uses
+  temporary in-memory rooms, host-uploaded CSV/JSON decks, Socket.IO state
+  synchronization, and host-managed external audio cues.
+- Do not add Spotify authentication, Spotify API calls, or automated provider
+  playback. Current policy research is recorded in
+  `docs/spotify-platform-research.md`.
+- Keep room and deck data ephemeral: no game history, player statistics, or
+  persistent database for version one.

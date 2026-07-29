@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build && node scripts/prepare-sites-build.mjs",
+    "dev": "tsx server/index.ts",
+    "build": "vite build && tsc -p tsconfig.server.json && node scripts/prepare-sites-build.mjs",
     "preview": "vite preview",
+    "start": "node dist/app-server/server/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts tests/sites-worker.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
   "dependencies": {
@@ -20,5 +23,13 @@
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
     "vite": "6.4.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.1.0",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
   }
 }
