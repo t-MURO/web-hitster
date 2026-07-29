@@ -1,7 +1,7 @@
 export const AVATAR_KEYS = ["maya", "leo", "sofia", "ben", "nora"] as const;
 
 export type AvatarKey = (typeof AVATAR_KEYS)[number];
-export type GamePhase = "listening" | "revealed";
+export type GamePhase = "listening" | "challenging" | "revealed";
 export type GameStatus = "playing" | "finished";
 export type PlaybackStatus = "ready" | "playing" | "paused";
 export type RoomStatus = "lobby" | "playing" | "finished";
@@ -9,6 +9,7 @@ export type RoomStatus = "lobby" | "playing" | "finished";
 export interface PlayerProfile {
   displayName: string;
   avatarKey: AvatarKey;
+  avatarUrl?: string | null;
 }
 
 export interface AppConfig {
@@ -67,11 +68,19 @@ export interface RoundOutcome {
   correct: boolean;
   previousYear: number | null;
   nextYear: number | null;
+  awardedPlayerId: string | null;
+  winningChallengePlayerId: string | null;
+}
+
+export interface RoundChallengeSnapshot {
+  playerId: string;
+  gapIndex: number;
 }
 
 export interface CurrentRoundSnapshot {
   phase: GamePhase;
   selectedGap: number;
+  challenges: RoundChallengeSnapshot[];
   outcome: RoundOutcome | null;
   track: PublicTrack | null;
 }
@@ -86,6 +95,7 @@ export interface GameSnapshot {
   remainingTrackCount: number;
   winners: string[];
   scores: Record<string, number>;
+  challengeTokens: Record<string, number>;
 }
 
 export interface RoomPlayerSnapshot {
@@ -102,7 +112,7 @@ export interface RoomPlayerSnapshot {
 
 export interface DeckSummary {
   name: string;
-  source: "upload" | "demo" | "spotify";
+  source: "upload" | "demo" | "spotify" | "hosted-demo";
   audioMode: "external" | "hosted";
   trackCount: number;
   ready: boolean;
@@ -120,6 +130,8 @@ export interface DeckFailureSnapshot {
   title: string;
   artist: string;
   reason: string;
+  attempts: number;
+  retryable: boolean;
 }
 
 export interface DeckPreparationSnapshot {
@@ -129,8 +141,20 @@ export interface DeckPreparationSnapshot {
   readyCount: number;
   failedCount: number;
   failures: DeckFailureSnapshot[];
+  retrying: boolean;
   currentTitle: string | null;
   message: string | null;
+}
+
+export interface MediaToolStatus {
+  available: boolean;
+  version: string | null;
+  message: string | null;
+}
+
+export interface MediaDiagnostics {
+  youtubeDownloader: MediaToolStatus;
+  ffmpeg: MediaToolStatus;
 }
 
 export interface PlaybackSnapshot {
@@ -147,6 +171,22 @@ export interface SpotifyConnectionSnapshot {
   configured: boolean;
   connected: boolean;
   displayName: string | null;
+}
+
+export interface SpotifyPlaylistSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  ownerName: string;
+  trackCount: number;
+  collaborative: boolean;
+  eligible: boolean;
+  spotifyUrl: string;
+}
+
+export interface SpotifyPlaylistsResponse {
+  playlists: SpotifyPlaylistSummary[];
 }
 
 export interface RoomRules {

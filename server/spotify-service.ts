@@ -1,8 +1,10 @@
-import type { Track } from "../shared/types.js";
+import type { SpotifyPlaylistSummary, Track } from "../shared/types.js";
 import type { SpotifySession } from "./session-store.js";
 
 const SPOTIFY_ACCOUNTS_URL = "https://accounts.spotify.com";
 const SPOTIFY_API_URL = "https://api.spotify.com/v1";
+const MAX_PLAYLIST_ITEMS_INSPECTED = 500;
+const MAX_ELIGIBLE_TRACKS = 200;
 const PLAYLIST_SCOPES = [
   "playlist-read-private",
   "playlist-read-collaborative",
@@ -26,7 +28,27 @@ interface SpotifyImage {
 }
 
 interface SpotifyPlaylistResponse {
+  id?: string;
   name?: string;
+  description?: string | null;
+  collaborative?: boolean;
+  external_urls?: { spotify?: string };
+  images?: SpotifyImage[];
+  owner?: {
+    id?: string;
+    display_name?: string | null;
+  };
+  items?: {
+    total?: number;
+  };
+  tracks?: {
+    total?: number;
+  };
+}
+
+interface SpotifyPlaylistsPage {
+  items?: SpotifyPlaylistResponse[];
+  next?: string | null;
 }
 
 interface SpotifyArtist {
@@ -64,6 +86,14 @@ export interface SpotifyPlaylistImport {
   id: string;
   name: string;
   tracks: Track[];
+  rejections: SpotifyPlaylistRejection[];
+}
+
+export interface SpotifyPlaylistRejection {
+  id: string;
+  title: string;
+  artist: string;
+  reason: string;
 }
 
 export class SpotifyError extends Error {
@@ -220,32 +250,73 @@ export class SpotifyService {
       `${SPOTIFY_API_URL}/playlists/${playlistId}`,
     );
     const tracks: Track[] = [];
+    const rejections: SpotifyPlaylistRejection[] = [];
     const seen = new Set<string>();
+    let itemIndex = 0;
     let next: string | null =
       `${SPOTIFY_API_URL}/playlists/${playlistId}/items?limit=50`;
 
-    while (next && tracks.length < 200) {
+    while (
+      next &&
+      tracks.length < MAX_ELIGIBLE_TRACKS &&
+      itemIndex < MAX_PLAYLIST_ITEMS_INSPECTED
+    ) {
       const page: SpotifyPlaylistItemsResponse =
         await this.#authorizedJson<SpotifyPlaylistItemsResponse>(spotify, next);
       for (const wrapper of page.items ?? []) {
         const item = wrapper.item ?? wrapper.track;
-        if (
-          !item?.id ||
-          item.is_local ||
-          (item.type != null && item.type !== "track") ||
-          seen.has(item.id)
-        ) {
-          continue;
-        }
-        const year = releaseYear(item.album?.release_date);
-        const title = item.name?.trim();
-        const artist = (item.artists ?? [])
+        itemIndex += 1;
+        if (itemIndex > MAX_PLAYLIST_ITEMS_INSPECTED) break;
+        const fallbackId = `spotify-rejected-${itemIndex}`;
+        const itemId = item?.id ? `spotify-${item.id}` : fallbackId;
+        const title = item?.name?.trim() || "Unavailable playlist item";
+        const artist = (item?.artists ?? [])
           .map((entry) => entry.name?.trim())
           .filter((name): name is string => Boolean(name))
           .join(", ");
-        if (!year || !title || !artist) continue;
-
+        if (!item) {
+          rejections.push({
+            id: itemId,
+            title,
+            artist: artist || "Unknown artist",
+            reason: "Spotify reports that this playlist item is unavailable.",
+          });
+          continue;
+        }
+        if (item.type != null && item.type !== "track") continue;
+        if (item.is_local) {
+          rejections.push({
+            id: itemId,
+            title,
+            artist: artist || "Unknown artist",
+            reason: "Local Spotify files cannot be matched automatically.",
+          });
+          continue;
+        }
+        if (!item.id) {
+          rejections.push({
+            id: itemId,
+            title,
+            artist: artist || "Unknown artist",
+            reason: "Spotify did not provide a usable track identifier.",
+          });
+          continue;
+        }
+        if (seen.has(item.id)) continue;
         seen.add(item.id);
+        const year = releaseYear(item.album?.release_date);
+        if (!year || !title || !artist) {
+          rejections.push({
+            id: itemId,
+            title,
+            artist: artist || "Unknown artist",
+            reason: !year
+              ? "Spotify did not provide a usable album release year."
+              : "Spotify did not provide complete title and artist metadata.",
+          });
+          continue;
+        }
+
         tracks.push({
           id: `spotify-${item.id}`,
           title,
@@ -261,13 +332,13 @@ export class SpotifyService {
             item.external_urls?.spotify ??
             `https://open.spotify.com/track/${item.id}`,
         });
-        if (tracks.length >= 200) break;
+        if (tracks.length >= MAX_ELIGIBLE_TRACKS) break;
       }
 
       next = this.#safeNext(page.next);
     }
 
-    if (!tracks.length) {
+    if (!tracks.length && !rejections.length) {
       throw new SpotifyError(
         "Spotify returned no eligible tracks. Use a playlist you own or collaborate on.",
         "PLAYLIST_EMPTY",
@@ -278,11 +349,66 @@ export class SpotifyService {
       id: playlistId,
       name: playlist.name?.trim() || "Spotify playlist",
       tracks,
+      rejections,
     };
   }
 
+  async listPlaylists(
+    spotify: SpotifySession,
+  ): Promise<SpotifyPlaylistSummary[]> {
+    const playlists: SpotifyPlaylistSummary[] = [];
+    const seen = new Set<string>();
+    let next: string | null =
+      `${SPOTIFY_API_URL}/me/playlists?limit=50&offset=0`;
+
+    for (let pageNumber = 0; next && pageNumber < 4; pageNumber += 1) {
+      const page: SpotifyPlaylistsPage =
+        await this.#authorizedJson<SpotifyPlaylistsPage>(spotify, next);
+
+      for (const playlist of page.items ?? []) {
+        const id = playlist.id?.trim();
+        const name = playlist.name?.trim();
+        if (!id || !name || seen.has(id)) continue;
+        seen.add(id);
+
+        const ownerId = playlist.owner?.id?.trim() ?? "";
+        const ownedByViewer = Boolean(
+          spotify.accountId && ownerId === spotify.accountId,
+        );
+        const collaborative = playlist.collaborative === true;
+        const hasAccessibleItems = playlist.items != null;
+        const rawTrackCount =
+          playlist.items?.total ?? playlist.tracks?.total ?? 0;
+        const trackCount =
+          Number.isInteger(rawTrackCount) && rawTrackCount >= 0
+            ? rawTrackCount
+            : 0;
+
+        playlists.push({
+          id,
+          name,
+          description: playlist.description?.trim() || null,
+          imageUrl: bestCover(playlist.images),
+          ownerName: ownedByViewer
+            ? "You"
+            : playlist.owner?.display_name?.trim() || "Spotify user",
+          trackCount,
+          collaborative,
+          eligible: hasAccessibleItems || ownedByViewer || collaborative,
+          spotifyUrl:
+            playlist.external_urls?.spotify ??
+            `https://open.spotify.com/playlist/${id}`,
+        });
+      }
+
+      next = page.next ?? null;
+    }
+
+    return playlists;
+  }
+
   async #profile(accessToken: string): Promise<SpotifyProfileResponse> {
-    const response = await this.#fetch(`${SPOTIFY_API_URL}/me`, {
+    const response = await this.#request(`${SPOTIFY_API_URL}/me`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const payload = await responsePayload(response);
@@ -304,7 +430,7 @@ export class SpotifyService {
       await this.#refresh(spotify);
     }
 
-    const response = await this.#fetch(url, {
+    const response = await this.#request(url, {
       headers: { Authorization: `Bearer ${spotify.accessToken}` },
     });
     const payload = await responsePayload(response);
@@ -323,6 +449,12 @@ export class SpotifyService {
       throw new SpotifyError(
         "Spotify is rate-limiting playlist imports. Wait a moment and try again.",
         "SPOTIFY_RATE_LIMITED",
+      );
+    }
+    if (response.status >= 500) {
+      throw new SpotifyError(
+        "Spotify is temporarily unavailable. Try the import again shortly.",
+        "SPOTIFY_UNAVAILABLE",
       );
     }
     if (!response.ok) {
@@ -356,7 +488,7 @@ export class SpotifyService {
     const authorization = Buffer.from(
       `${this.#clientId}:${this.#clientSecret}`,
     ).toString("base64");
-    const response = await this.#fetch(`${SPOTIFY_ACCOUNTS_URL}/api/token`, {
+    const response = await this.#request(`${SPOTIFY_ACCOUNTS_URL}/api/token`, {
       method: "POST",
       headers: {
         Authorization: `Basic ${authorization}`,
@@ -372,6 +504,20 @@ export class SpotifyService {
       );
     }
     return (payload ?? {}) as SpotifyTokenResponse;
+  }
+
+  async #request(input: string, init: RequestInit): Promise<Response> {
+    try {
+      return await this.#fetch(input, {
+        ...init,
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      throw new SpotifyError(
+        "Spotify could not be reached. Check the server connection and try again.",
+        "SPOTIFY_UNAVAILABLE",
+      );
+    }
   }
 
   #safeNext(value: string | null | undefined): string | null {

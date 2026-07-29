@@ -31,7 +31,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       publicBaseUrl.startsWith("https://"),
     ),
     disconnectGraceMs: Number.parseInt(env.DISCONNECT_GRACE_MS ?? "120000", 10),
-    deckSize: Number.parseInt(env.DECK_SIZE ?? "50", 10),
+    deckSize: Number.parseInt(env.DECK_SIZE ?? "100", 10),
     winningTimelineSize: Number.parseInt(
       env.WINNING_TIMELINE_SIZE ?? "10",
       10,
@@ -40,13 +40,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     spotifyClientSecret: env.SPOTIFY_CLIENT_SECRET?.trim() ?? "",
     spotifyRedirectUri:
       env.SPOTIFY_REDIRECT_URI?.trim() ??
-      `${publicBaseUrl}/api/spotify/callback`,
+      `${publicBaseUrl}/callback`,
     youtubeDownloaderPath: env.YOUTUBE_DOWNLOADER_PATH?.trim() || "yt-dlp",
     ffmpegPath: env.FFMPEG_PATH?.trim() || "ffmpeg",
     audioTempRoot:
       env.AUDIO_TEMP_ROOT?.trim() ||
       path.join(os.tmpdir(), "music-timeline-audio"),
-    audioBitrateKbps: Number.parseInt(env.AUDIO_BITRATE_KBPS ?? "192", 10),
+    audioBitrateKbps: Number.parseInt(env.AUDIO_BITRATE_KBPS ?? "96", 10),
     audioPreparationConcurrency: Number.parseInt(
       env.AUDIO_PREPARATION_CONCURRENCY ?? "2",
       10,

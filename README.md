@@ -12,12 +12,20 @@ synchronizes blind playback across the room.
 - Host-only Spotify Authorization Code login; secrets and tokens stay server-side
 - Spotify title, artists, album release year, cover, duration, and ISRC metadata
 - Asynchronous YouTube search plus `yt-dlp`/`ffmpeg` MP3 preparation
+- Multi-candidate title/artist/duration matching that rejects common live,
+  cover, karaoke, remix, sped-up, and slowed variants
 - Live preparation progress, skipped-track count, and host year review
+- Per-track and retry-all recovery, attempt counts, cancellation, and processor
+  diagnostics
+- Explicit non-retryable exclusions for unavailable Spotify items, local files,
+  and tracks without usable release-year metadata
 - Start as soon as 50 unique tracks are ready; no repeats within a game
 - Authenticated per-round MP3 delivery with HTTP range support
 - Client preload acknowledgements and server-scheduled synchronized starts
 - Blind placement, reveal, scoring, reconnects, host transfer, and rematches
 - CSV/JSON decks with host-managed external cues as a fallback
+- A generated hosted-audio demo that exercises the full streaming path without
+  Spotify credentials or YouTube access
 - No accounts, history, statistics, database, or persistent media
 
 ## Hosted audio flow
@@ -27,26 +35,28 @@ synchronizes blind playback across the room.
 3. Spotify supplies the game metadata. The server searches YouTube for each
    title and artist, extracts MP3 audio, and stores it under a room-specific
    temporary directory.
-4. A game can start once at least 50 tracks have succeeded. Each browser enables
-   audio once, downloads the opaque current-round MP3, decodes it locally, and
-   reports readiness.
+4. A two-player game can start once three tracks have succeeded; larger rooms
+   wait for one starting card per player plus the first mystery track. Browsers
+   preload and decode each opaque round automatically.
 5. The host starts playback only after every connected player is ready. The
    server broadcasts a shared future start time so clients begin together.
-6. Files remain available for rematches and are deleted when the room empties,
-   expires, or the process/container restarts.
+6. Preparation stops after 100 successful tracks. Files remain available for
+   rematches and are deleted when the room empties, expires, or the
+   process/container restarts.
 
 The current mystery title, artist, cover, Spotify link, YouTube result, and
 filesystem path are never included in pre-reveal room state.
 
 To bound temporary storage and preparation time, one import uses at most the
-first 200 eligible unique playlist tracks.
+first 200 eligible unique playlist tracks and inspects at most 500 playlist
+items.
 
 ## Spotify setup
 
 Create a Spotify Developer application and register the exact redirect URI:
 
 ```text
-https://your-music-subdomain.example/api/spotify/callback
+https://your-music-subdomain.example/callback
 ```
 
 Set the same value in `SPOTIFY_REDIRECT_URI`. The host grants only
@@ -65,7 +75,11 @@ npm run dev
 ```
 
 Without Spotify credentials the app still starts and the demo/upload fallback
-remains available.
+remains available. In development, choose **Use hosted audio demo** to generate
+temporary test tones with `ffmpeg` and exercise preparation, authenticated
+streaming, client readiness, synchronized playback, and cleanup without any
+provider API keys. The lobby also reports whether `yt-dlp` and `ffmpeg` are
+available on the server.
 
 ## Run on a home server
 

@@ -13,6 +13,7 @@ import { createDemoDeck, DeckError, parseDeck } from "./deck-parser.js";
 import { GameRuleError, TimelineGame } from "./game-engine.js";
 
 const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const PLAYABLE_TRACK_BUFFER = 3;
 
 type ActionType = "create" | "join" | "resume" | "command";
 type Payload = Record<string, unknown>;
@@ -43,11 +44,16 @@ interface RoomPlayer {
 
 interface RoomDeck {
   name: string;
-  source: "upload" | "demo" | "spotify";
+  source: "upload" | "demo" | "spotify" | "hosted-demo";
   tracks: Track[];
   loadedAt: number;
   importId: string | null;
   preparation: DeckPreparationSnapshot | null;
+  failedTracks: Map<
+    string,
+    { track: Track; reason: string; attempts: number }
+  >;
+  staticFailures: DeckPreparationSnapshot["failures"];
 }
 
 interface Room {
@@ -112,7 +118,9 @@ function playerFromSession(session: RoomSession): RoomPlayer {
     id: session.id,
     displayName: session.profile.displayName,
     avatarKey: session.profile.avatarKey,
-    avatarUrl: `/assets/avatars/${session.profile.avatarKey}.png`,
+    avatarUrl:
+      session.profile.avatarUrl ??
+      `/assets/avatars/${session.profile.avatarKey}.png`,
     connected: true,
     disconnectedAt: null,
     joinedAt: Date.now(),
@@ -124,6 +132,12 @@ function asPayload(value: unknown): Payload {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Payload)
     : {};
+}
+
+function isHostedSource(
+  source: RoomDeck["source"] | undefined,
+): source is "spotify" | "hosted-demo" {
+  return source === "spotify" || source === "hosted-demo";
 }
 
 export class RoomManager {
@@ -342,6 +356,8 @@ export class RoomManager {
       loadedAt: Date.now(),
       importId: null,
       preparation: null,
+      failedTracks: new Map(),
+      staticFailures: [],
     };
     this.#releaseMedia(room.code);
   }
@@ -361,22 +377,14 @@ export class RoomManager {
       loadedAt: Date.now(),
       importId: null,
       preparation: null,
+      failedTracks: new Map(),
+      staticFailures: [],
     };
     this.#releaseMedia(room.code);
   }
 
-  #overrideYear(room: Room, sessionId: string, payload: Payload): void {
-    this.#assertHost(room, sessionId);
-    if (room.status !== "lobby" || !room.deck) {
-      throw new RoomError("Load a deck before correcting its years.");
-    }
-    const year = Number.parseInt(String(payload.year), 10);
-    if (!Number.isInteger(year) || year < 1900 || year > 2100) {
-      throw new RoomError("The corrected year must be between 1900 and 2100.");
-    }
-    const track = room.deck.tracks.find((item) => item.id === payload.trackId);
-    if (!track) throw new RoomError("That track is no longer in the deck.");
-    track.year = year;
+  #minimumTracksToStart(room: Room): number {
+    return Math.max(PLAYABLE_TRACK_BUFFER, room.players.size + 1);
   }
 
   #startGame(room: Room, sessionId: string): void {
@@ -390,13 +398,18 @@ export class RoomManager {
     if ([...room.players.values()].some((player) => !player.connected)) {
       throw new RoomError("Wait for every player to reconnect before starting.");
     }
-    if (!room.deck || room.deck.tracks.length < this.#deckSize) {
+    const minimumTracks = this.#minimumTracksToStart(room);
+    if (!room.deck || room.deck.tracks.length < minimumTracks) {
       throw new RoomError(
-        `Load a deck with at least ${this.#deckSize} tracks first.`,
+        "The music is not ready yet.",
         "DECK_REQUIRED",
       );
     }
 
+    const acceptingTracks =
+      isHostedSource(room.deck.source) &&
+      room.deck.preparation?.status === "processing" &&
+      room.deck.tracks.length < this.#deckSize;
     const tracks = shuffle(room.deck.tracks, this.#random).slice(
       0,
       this.#deckSize,
@@ -412,6 +425,8 @@ export class RoomManager {
       tracks,
       random: this.#random,
       winningTimelineSize: this.#winningTimelineSize,
+      maximumTrackCount: this.#deckSize,
+      acceptingTracks,
     });
     room.status = "playing";
     room.locked = true;
@@ -483,9 +498,6 @@ export class RoomManager {
       case "useDemoDeck":
         this.#useDemoDeck(room, sessionId);
         break;
-      case "overrideYear":
-        this.#overrideYear(room, sessionId, commandPayload);
-        break;
       case "startGame":
         this.#startGame(room, sessionId);
         break;
@@ -496,7 +508,7 @@ export class RoomManager {
       }
       case "audioReady": {
         const game = this.#activeGame(room);
-        if (room.deck?.source !== "spotify") {
+        if (!isHostedSource(room.deck?.source)) {
           throw new RoomError(
             "This room does not use hosted audio.",
             "AUDIO_NOT_HOSTED",
@@ -525,7 +537,7 @@ export class RoomManager {
           throw new RoomError("There is no mystery track to start.");
         }
         if (
-          room.deck?.source === "spotify" &&
+          isHostedSource(room.deck?.source) &&
           [...room.players.values()].some(
             (player) =>
               player.connected &&
@@ -555,8 +567,18 @@ export class RoomManager {
             "The host must start the audio cue before lock-in.",
           );
         }
-        game.reveal(sessionId);
+        game.lockPlacement(sessionId);
         this.#pausePlayback(room);
+        break;
+      }
+      case "challengeGap": {
+        const game = this.#activeGame(room);
+        game.challengeGap(sessionId, Number(commandPayload.gapIndex));
+        break;
+      }
+      case "reveal": {
+        const game = this.#activeGame(room);
+        game.reveal(sessionId, room.hostId);
         if (game.status === "finished") room.status = "finished";
         break;
       }
@@ -724,12 +746,14 @@ export class RoomManager {
             name: room.deck.name,
             source: room.deck.source,
             audioMode:
-              room.deck.source === "spotify" ? "hosted" : "external",
-            trackCount: room.deck.tracks.length,
-            ready: room.deck.tracks.length >= this.#deckSize,
-            preparation: room.deck.preparation
-              ? structuredClone(room.deck.preparation)
-              : null,
+              isHostedSource(room.deck.source) ? "hosted" : "external",
+            trackCount: isHost ? room.deck.tracks.length : 0,
+            ready:
+              room.deck.tracks.length >= this.#minimumTracksToStart(room),
+            preparation:
+              isHost && room.deck.preparation
+                ? structuredClone(room.deck.preparation)
+                : null,
           }
         : null,
       deckReview:
@@ -740,7 +764,7 @@ export class RoomManager {
       hostCue:
         isHost &&
         room.status === "playing" &&
-        room.deck?.source !== "spotify" &&
+        !isHostedSource(room.deck?.source) &&
         currentTrack
           ? cloneTrackForReview(currentTrack)
           : null,
@@ -756,11 +780,40 @@ export class RoomManager {
     const { room } = this.#membership(sessionId, code);
     this.#assertHost(room, sessionId);
     if (room.status !== "lobby") {
-      throw new RoomError("Spotify playlists can only be loaded in the lobby.");
+      throw new RoomError("Audio decks can only be changed in the lobby.");
     }
   }
 
   beginSpotifyDeck({
+    code,
+    sessionId,
+    name,
+    total,
+    failures = [],
+  }: {
+    code: string;
+    sessionId: string;
+    name: string;
+    total: number;
+    failures?: Array<{
+      id: string;
+      title: string;
+      artist: string;
+      reason: string;
+    }>;
+  }): string {
+    return this.#beginHostedDeck({
+      code,
+      sessionId,
+      name,
+      total,
+      source: "spotify",
+      message: "Matching Spotify tracks with YouTube audio…",
+      failures,
+    });
+  }
+
+  beginHostedDemoDeck({
     code,
     sessionId,
     name,
@@ -771,24 +824,68 @@ export class RoomManager {
     name: string;
     total: number;
   }): string {
+    return this.#beginHostedDeck({
+      code,
+      sessionId,
+      name,
+      total,
+      source: "hosted-demo",
+      message: "Generating temporary test audio without Spotify or YouTube…",
+      failures: [],
+    });
+  }
+
+  #beginHostedDeck({
+    code,
+    sessionId,
+    name,
+    total,
+    source,
+    message,
+    failures,
+  }: {
+    code: string;
+    sessionId: string;
+    name: string;
+    total: number;
+    source: "spotify" | "hosted-demo";
+    message: string;
+    failures: Array<{
+      id: string;
+      title: string;
+      artist: string;
+      reason: string;
+    }>;
+  }): string {
     this.assertHostLobby(code, sessionId);
     const room = this.#room(code);
     const importId = randomBytes(16).toString("hex");
     room.deck = {
-      name: name.trim().slice(0, 64) || "Spotify playlist",
-      source: "spotify",
+      name: name.trim().slice(0, 64) || "Hosted audio deck",
+      source,
       tracks: [],
       loadedAt: Date.now(),
       importId,
+      failedTracks: new Map(),
+      staticFailures: failures.map((failure) => ({
+        ...failure,
+        attempts: 0,
+        retryable: false,
+      })),
       preparation: {
         status: "processing",
         total,
-        processed: 0,
+        processed: failures.length,
         readyCount: 0,
-        failedCount: 0,
-        failures: [],
+        failedCount: failures.length,
+        failures: failures.map((failure) => ({
+          ...failure,
+          attempts: 0,
+          retryable: false,
+        })),
+        retrying: false,
         currentTitle: null,
-        message: "Matching Spotify tracks with YouTube audio…",
+        message,
       },
     };
     this.#notify(room.code);
@@ -800,40 +897,86 @@ export class RoomManager {
     importId,
     track,
     error,
+    retry = false,
   }: {
     code: string;
     importId: string;
     track: Track;
     error: string | null;
+    retry?: boolean;
   }): boolean {
     const room = this.#rooms.get(cleanCode(code));
     if (
       !room?.deck ||
-      room.deck.source !== "spotify" ||
+      !isHostedSource(room.deck.source) ||
       room.deck.importId !== importId ||
       !room.deck.preparation
     ) {
       return false;
     }
-    room.deck.preparation.processed += 1;
+    if (!retry) room.deck.preparation.processed += 1;
     room.deck.preparation.currentTitle = track.title;
     if (error) {
-      room.deck.preparation.failedCount += 1;
+      const previous = room.deck.failedTracks.get(track.id);
+      const attempts = (previous?.attempts ?? 0) + 1;
+      room.deck.failedTracks.set(track.id, {
+        track: structuredClone(track),
+        reason: error,
+        attempts,
+      });
+      room.deck.preparation.failures =
+        room.deck.preparation.failures.filter(
+          (failure) => failure.id !== track.id,
+        );
       room.deck.preparation.failures.push({
         id: track.id,
         title: track.title,
         artist: track.artist,
         reason: error,
+        attempts,
+        retryable: true,
       });
       room.deck.preparation.message = `Skipped “${track.title}”: ${error}`;
     } else if (!room.deck.tracks.some((item) => item.id === track.id)) {
-      room.deck.tracks.push(structuredClone(track));
+      room.deck.failedTracks.delete(track.id);
+      room.deck.preparation.failures =
+        room.deck.preparation.failures.filter(
+          (failure) => failure.id !== track.id,
+        );
+      const preparedTrack = structuredClone(track);
+      room.deck.tracks.push(preparedTrack);
+      const previousRoundNumber = room.game?.snapshot().roundNumber ?? null;
+      room.game?.addTracks([preparedTrack]);
+      if (
+        room.game &&
+        previousRoundNumber !== null &&
+        room.game.snapshot().roundNumber !== previousRoundNumber
+      ) {
+        room.playback = {
+          status: "ready",
+          cueVersion: room.playback.cueVersion + 1,
+          changedAt: Date.now(),
+          roundNumber: room.game.snapshot().roundNumber,
+          startAt: null,
+          positionMs: 0,
+          readyPlayerIds: [],
+        };
+      }
       room.deck.preparation.readyCount = room.deck.tracks.length;
       room.deck.preparation.message =
-        room.deck.tracks.length >= this.#deckSize
+        room.deck.tracks.length >= this.#minimumTracksToStart(room)
           ? "Enough tracks are ready. You can start now."
           : "Preparing temporary MP3 files…";
     }
+    const retryableFailures = room.deck.preparation.failures.filter(
+      (failure) => failure.retryable,
+    );
+    room.deck.preparation.failures = [
+      ...room.deck.staticFailures,
+      ...retryableFailures,
+    ];
+    room.deck.preparation.failedCount =
+      room.deck.preparation.failures.length;
     this.#notify(room.code);
     return true;
   }
@@ -848,19 +991,26 @@ export class RoomManager {
     const room = this.#rooms.get(cleanCode(code));
     if (
       !room?.deck ||
-      room.deck.source !== "spotify" ||
+      !isHostedSource(room.deck.source) ||
       room.deck.importId !== importId ||
       !room.deck.preparation
     ) {
       return false;
     }
-    const enoughTracks = room.deck.tracks.length >= this.#deckSize;
+    const enoughTracks =
+      room.deck.tracks.length >= this.#minimumTracksToStart(room);
     room.deck.preparation.status = enoughTracks ? "ready" : "failed";
+    room.deck.preparation.retrying = false;
     room.deck.preparation.currentTitle = null;
     room.deck.preparation.readyCount = room.deck.tracks.length;
     room.deck.preparation.message = enoughTracks
       ? `${room.deck.tracks.length} tracks are ready for this room.`
-      : `Only ${room.deck.tracks.length} tracks could be prepared; ${this.#deckSize} are required.`;
+      : "Not enough tracks could be prepared to start the game.";
+    room.game?.closeTrackFeed();
+    if (room.game?.status === "finished") {
+      room.status = "finished";
+      this.#pausePlayback(room);
+    }
     this.#notify(room.code);
     return true;
   }
@@ -877,17 +1027,98 @@ export class RoomManager {
     const room = this.#rooms.get(cleanCode(code));
     if (
       !room?.deck ||
-      room.deck.source !== "spotify" ||
+      !isHostedSource(room.deck.source) ||
       room.deck.importId !== importId ||
       !room.deck.preparation
     ) {
       return false;
     }
     room.deck.preparation.status = "failed";
+    room.deck.preparation.retrying = false;
     room.deck.preparation.currentTitle = null;
     room.deck.preparation.message = message.slice(0, 280);
+    room.game?.closeTrackFeed();
+    if (room.game?.status === "finished") {
+      room.status = "finished";
+      this.#pausePlayback(room);
+    }
     this.#notify(room.code);
     return true;
+  }
+
+  retryHostedFailures({
+    code,
+    sessionId,
+    trackIds,
+  }: {
+    code: string;
+    sessionId: string;
+    trackIds?: string[];
+  }): {
+    importId: string;
+    source: "spotify" | "hosted-demo";
+    tracks: Track[];
+    remainingCapacity: number;
+  } {
+    this.assertHostLobby(code, sessionId);
+    const room = this.#room(code);
+    const deck = room.deck;
+    if (
+      !deck ||
+      !isHostedSource(deck.source) ||
+      !deck.importId ||
+      !deck.preparation
+    ) {
+      throw new RoomError(
+        "There is no hosted audio deck to retry.",
+        "NO_HOSTED_DECK",
+      );
+    }
+    if (deck.preparation.status === "processing") {
+      throw new RoomError(
+        "Wait for the current preparation run to finish first.",
+        "PREPARATION_BUSY",
+      );
+    }
+    const requestedIds =
+      trackIds?.length ? new Set(trackIds) : new Set(deck.failedTracks.keys());
+    const tracks = [...deck.failedTracks.entries()]
+      .filter(([trackId]) => requestedIds.has(trackId))
+      .map(([, failure]) => structuredClone(failure.track));
+    if (!tracks.length) {
+      throw new RoomError(
+        "There are no matching failed tracks to retry.",
+        "NO_FAILED_TRACKS",
+      );
+    }
+
+    deck.preparation.status = "processing";
+    deck.preparation.retrying = true;
+    deck.preparation.currentTitle = null;
+    deck.preparation.message = `Retrying ${tracks.length} excluded ${
+      tracks.length === 1 ? "track" : "tracks"
+    }…`;
+    this.#notify(room.code);
+    return {
+      importId: deck.importId,
+      source: deck.source,
+      tracks,
+      remainingCapacity: Math.max(0, this.#deckSize - deck.tracks.length),
+    };
+  }
+
+  cancelHostedDeck(code: string, sessionId: string): void {
+    this.assertHostLobby(code, sessionId);
+    const room = this.#room(code);
+    if (!isHostedSource(room.deck?.source)) {
+      throw new RoomError(
+        "There is no hosted preparation to cancel.",
+        "NO_HOSTED_DECK",
+      );
+    }
+    room.deck = null;
+    this.#releaseMedia(room.code);
+    this.#notify(room.code);
   }
 
   hostedTrackForRound({
@@ -900,7 +1131,7 @@ export class RoomManager {
     roundNumber: number;
   }): { trackId: string } {
     const { room } = this.#membership(sessionId, code);
-    if (room.deck?.source !== "spotify" || !room.game) {
+    if (!isHostedSource(room.deck?.source) || !room.game) {
       throw new RoomError(
         "This room does not have hosted audio.",
         "AUDIO_NOT_HOSTED",

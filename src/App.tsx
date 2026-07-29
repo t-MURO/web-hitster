@@ -41,7 +41,10 @@ import {
   roomInviteUrl,
 } from "./room-url.js";
 import { useRoom } from "./useRoom.js";
-import { useSynchronizedAudio } from "./useSynchronizedAudio.js";
+import {
+  primeRoomAudio,
+  useSynchronizedAudio,
+} from "./useSynchronizedAudio.js";
 import type {
   ClientConfig,
   CurrentRoundSnapshot,
@@ -53,11 +56,19 @@ import type {
   RoomPlayerSnapshot,
   RoomSnapshot,
   SessionResponse,
+  SpotifyPlaylistSummary,
+  SpotifyPlaylistsResponse,
   Track,
 } from "../shared/types.js";
 
 const AVATARS = ["maya", "leo", "sofia", "ben", "nora"] as const;
 const FALLBACK_COVERS = [1977, 1984, 1999, 2013];
+const PLAYER_PROFILE_STORAGE_KEY = "webstar.player-profile.v1";
+const MAX_PROFILE_PHOTO_BYTES = 128 * 1024;
+const MAX_PROFILE_PHOTO_DATA_URL_LENGTH =
+  Math.ceil((MAX_PROFILE_PHOTO_BYTES * 4) / 3) + 64;
+const MAX_PROFILE_PHOTO_SOURCE_BYTES = 8 * 1024 * 1024;
+const PROFILE_PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 type AsyncCallback = () => Promise<unknown>;
 type RunAction = (label: string, callback: AsyncCallback) => Promise<void>;
@@ -79,6 +90,154 @@ function hasActiveGame(room: RoomSnapshot): room is ActiveRoom {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong.";
+}
+
+function isAvatarKey(value: unknown): value is (typeof AVATARS)[number] {
+  return AVATARS.includes(value as (typeof AVATARS)[number]);
+}
+
+function isProfilePhoto(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_PROFILE_PHOTO_DATA_URL_LENGTH &&
+    /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
+  );
+}
+
+function readRememberedProfile(): PlayerProfile | null {
+  try {
+    const stored = window.localStorage.getItem(PLAYER_PROFILE_STORAGE_KEY);
+    if (!stored) return null;
+    const value = JSON.parse(stored) as Partial<PlayerProfile>;
+    const displayName =
+      typeof value.displayName === "string" ? value.displayName.trim() : "";
+    if (
+      displayName.length < 2 ||
+      displayName.length > 24 ||
+      !isAvatarKey(value.avatarKey)
+    ) {
+      return null;
+    }
+    return {
+      displayName,
+      avatarKey: value.avatarKey,
+      avatarUrl: isProfilePhoto(value.avatarUrl) ? value.avatarUrl : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function rememberProfile(profile: PlayerProfile): void {
+  try {
+    window.localStorage.setItem(
+      PLAYER_PROFILE_STORAGE_KEY,
+      JSON.stringify({
+        displayName: profile.displayName,
+        avatarKey: profile.avatarKey,
+        avatarUrl: isProfilePhoto(profile.avatarUrl)
+          ? profile.avatarUrl
+          : null,
+      } satisfies PlayerProfile),
+    );
+  } catch {
+    // Private browsing and storage limits should not prevent someone from playing.
+  }
+}
+
+function forgetProfile(): void {
+  try {
+    window.localStorage.removeItem(PLAYER_PROFILE_STORAGE_KEY);
+  } catch {
+    // The server profile can still be changed when browser storage is unavailable.
+  }
+}
+
+function playerAvatar(profile: PlayerProfile): string {
+  return isProfilePhoto(profile.avatarUrl)
+    ? profile.avatarUrl
+    : `/assets/avatars/${profile.avatarKey}.png`;
+}
+
+function loadPhoto(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("That image could not be opened."));
+    image.src = url;
+  });
+}
+
+function canvasBlob(
+  canvas: HTMLCanvasElement,
+  type: "image/webp" | "image/jpeg",
+  quality: number,
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) =>
+        blob
+          ? resolve(blob)
+          : reject(new Error("That image could not be prepared.")),
+      type,
+      quality,
+    );
+  });
+}
+
+function blobDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () =>
+      reject(new Error("That image could not be prepared."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function prepareProfilePhoto(file: File): Promise<string> {
+  if (!PROFILE_PHOTO_TYPES.has(file.type)) {
+    throw new Error("Choose a JPEG, PNG, or WebP image.");
+  }
+  if (file.size > MAX_PROFILE_PHOTO_SOURCE_BYTES) {
+    throw new Error("Choose an image smaller than 8 MB.");
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await loadPhoto(objectUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = 192;
+    canvas.height = 192;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("That image could not be prepared.");
+
+    const sourceSize = Math.min(image.naturalWidth, image.naturalHeight);
+    const sourceX = (image.naturalWidth - sourceSize) / 2;
+    const sourceY = (image.naturalHeight - sourceSize) / 2;
+    context.drawImage(
+      image,
+      sourceX,
+      sourceY,
+      sourceSize,
+      sourceSize,
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+
+    let blob = await canvasBlob(canvas, "image/webp", 0.78);
+    if (blob.size > MAX_PROFILE_PHOTO_BYTES) {
+      blob = await canvasBlob(canvas, "image/jpeg", 0.7);
+    }
+    if (blob.size > MAX_PROFILE_PHOTO_BYTES) {
+      throw new Error("That image is still too large after resizing.");
+    }
+    return blobDataUrl(blob);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 function isWebUrl(value: string): boolean {
@@ -168,8 +327,25 @@ function ProfileScreen({
 }) {
   const [displayName, setDisplayName] = useState("");
   const [avatarKey, setAvatarKey] = useState("maya");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+
+  async function choosePhoto(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setPhotoBusy(true);
+    setError("");
+    try {
+      setAvatarUrl(await prepareProfilePhoto(file));
+    } catch (photoError) {
+      setError(errorMessage(photoError));
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -178,7 +354,7 @@ function ProfileScreen({
     try {
       const payload = await api<{ profile: PlayerProfile }>("/api/profile", {
         method: "POST",
-        body: JSON.stringify({ displayName, avatarKey }),
+        body: JSON.stringify({ displayName, avatarKey, avatarUrl }),
       });
       onReady(payload.profile);
     } catch (requestError) {
@@ -196,8 +372,8 @@ function ProfileScreen({
           <span className="eyebrow">Private · Fully remote</span>
           <h1>Enter the listening room</h1>
           <p>
-            Pick the name and portrait your friends will see. No account or
-            history is stored.
+            Pick the name and portrait your friends will see. Your profile is
+            saved only in this browser.
           </p>
           <form onSubmit={submit}>
             <label className="field-label" htmlFor="display-name">
@@ -218,20 +394,62 @@ function ProfileScreen({
                 {AVATARS.map((avatar) => (
                   <button
                     aria-label={`Use ${avatar} portrait`}
-                    aria-pressed={avatarKey === avatar}
-                    className={avatarKey === avatar ? "avatar-choice is-selected" : "avatar-choice"}
+                    aria-pressed={!avatarUrl && avatarKey === avatar}
+                    className={
+                      !avatarUrl && avatarKey === avatar
+                        ? "avatar-choice is-selected"
+                        : "avatar-choice"
+                    }
                     key={avatar}
-                    onClick={() => setAvatarKey(avatar)}
+                    onClick={() => {
+                      setAvatarKey(avatar);
+                      setAvatarUrl(null);
+                    }}
                     type="button"
                   >
                     <img src={`/assets/avatars/${avatar}.png`} alt="" />
                   </button>
                 ))}
+                <label
+                  aria-label={
+                    avatarUrl
+                      ? "Change uploaded profile photo"
+                      : "Upload a profile photo"
+                  }
+                  className={
+                    avatarUrl
+                      ? "avatar-choice avatar-upload is-selected"
+                      : "avatar-choice avatar-upload"
+                  }
+                  title="Upload a profile photo"
+                >
+                  <input
+                    accept="image/jpeg,image/png,image/webp"
+                    disabled={photoBusy}
+                    onChange={(event) => void choosePhoto(event)}
+                    type="file"
+                  />
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt="" />
+                  ) : (
+                    <UploadSimple aria-hidden="true" weight="bold" />
+                  )}
+                </label>
               </div>
             </fieldset>
             <ErrorBanner message={error} onClose={() => setError("")} />
-            <button className="primary-button" disabled={busy} type="submit">
-              <span>{busy ? "Entering…" : "Continue"}</span>
+            <button
+              className="primary-button"
+              disabled={busy || photoBusy}
+              type="submit"
+            >
+              <span>
+                {photoBusy
+                  ? "Preparing photo…"
+                  : busy
+                    ? "Entering…"
+                    : "Continue"}
+              </span>
               <ArrowRight weight="bold" aria-hidden="true" />
             </button>
           </form>
@@ -278,7 +496,7 @@ function HomeScreen({
     <main className="entry-shell">
       <BrandHeader connected={connected}>
         <div className="signed-in-player">
-          <img src={`/assets/avatars/${profile.avatarKey}.png`} alt="" />
+          <img src={playerAvatar(profile)} alt="" />
           <span>{profile.displayName}</span>
         </div>
         <button className="topbar-button" onClick={onLogout} type="button">
@@ -292,13 +510,16 @@ function HomeScreen({
             <span className="eyebrow">Game master</span>
             <h1>Start a room</h1>
             <p>
-              Import a Spotify playlist, let the server prepare temporary
-              audio, then invite 1–4 friends.
+              Choose a Spotify playlist, then invite 1–4 friends for a private
+              game.
             </p>
             <button
               className="primary-button"
               disabled={!connected || Boolean(busy)}
-              onClick={() => run("create", createRoom)}
+              onClick={() => {
+                primeRoomAudio();
+                void run("create", createRoom);
+              }}
               type="button"
             >
               <span>{busy === "create" ? "Creating…" : "Create room"}</span>
@@ -327,7 +548,10 @@ function HomeScreen({
             <button
               className="secondary-button"
               disabled={!connected || Boolean(busy) || code.length !== 5}
-              onClick={() => run("join", () => joinRoom(code))}
+              onClick={() => {
+                primeRoomAudio();
+                void run("join", () => joinRoom(code));
+              }}
               type="button"
             >
               {busy === "join" ? "Joining…" : "Join room"}
@@ -336,7 +560,7 @@ function HomeScreen({
         </div>
         <ErrorBanner message={error} onClose={() => setError("")} />
         <p className="privacy-note">
-          Rooms and prepared audio are temporary. First to{" "}
+          Private rooms for 2–5 friends. First to{" "}
           {config.winningTimelineSize} timeline cards wins.
         </p>
       </section>
@@ -360,7 +584,13 @@ function PlayerAvatar({
   );
 }
 
-function PlayerStrip({ players }: { players: RoomPlayerSnapshot[] }) {
+function PlayerStrip({
+  players,
+  challengeTokens,
+}: {
+  players: RoomPlayerSnapshot[];
+  challengeTokens?: Record<string, number>;
+}) {
   return (
     <section
       className="player-strip"
@@ -383,6 +613,12 @@ function PlayerStrip({ players }: { players: RoomPlayerSnapshot[] }) {
               <Headphones weight="fill" aria-hidden="true" />
               {player.connected ? "Connected" : "Reconnecting"}
             </span>
+            {challengeTokens && (
+              <span className="token-label">
+                <i aria-hidden="true" />
+                {challengeTokens[player.id] ?? 0} HITSTER
+              </span>
+            )}
           </div>
         </div>
       ))}
@@ -405,6 +641,48 @@ function LobbyScreen({
   const [busy, setBusy] = useState("");
   const [copied, setCopied] = useState(false);
   const [playlistUrl, setPlaylistUrl] = useState("");
+  const [playlistSearch, setPlaylistSearch] = useState("");
+  const [spotifyPlaylists, setSpotifyPlaylists] = useState<
+    SpotifyPlaylistSummary[]
+  >([]);
+  const [spotifyPlaylistsStatus, setSpotifyPlaylistsStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+
+  useEffect(() => {
+    if (!room.isHost || !room.spotify.connected) {
+      setSpotifyPlaylists([]);
+      setSpotifyPlaylistsStatus("idle");
+      return;
+    }
+    let cancelled = false;
+    setSpotifyPlaylistsStatus("loading");
+    void api<SpotifyPlaylistsResponse>(
+      `/api/spotify/playlists?code=${encodeURIComponent(room.code)}`,
+    )
+      .then(({ playlists }) => {
+        if (cancelled) return;
+        setSpotifyPlaylists(playlists);
+        setSpotifyPlaylistsStatus("ready");
+      })
+      .catch((requestError: unknown) => {
+        if (cancelled) return;
+        setSpotifyPlaylistsStatus("error");
+        setError(errorMessage(requestError));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [room.code, room.isHost, room.spotify.connected]);
+
+  useEffect(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    const spotifyError = parameters.get("spotify_error");
+    if (spotifyError) setError(spotifyError);
+    if (spotifyError || parameters.has("spotify")) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   async function run(label: string, callback: AsyncCallback) {
     setBusy(label);
@@ -440,10 +718,15 @@ function LobbyScreen({
     room.players.every((player) => player.connected) &&
     room.deck?.ready,
   );
-  const preparation = room.deck?.preparation;
-  const progressPercent = preparation?.total
-    ? Math.round((preparation.processed / preparation.total) * 100)
-    : 0;
+  const normalizedPlaylistSearch = playlistSearch.trim().toLocaleLowerCase();
+  const visibleSpotifyPlaylists = normalizedPlaylistSearch
+    ? spotifyPlaylists.filter((playlist) =>
+        [playlist.name, playlist.ownerName, playlist.description ?? ""].some(
+          (value) =>
+            value.toLocaleLowerCase().includes(normalizedPlaylistSearch),
+        ),
+      )
+    : spotifyPlaylists;
 
   return (
     <main className="lobby-shell">
@@ -464,9 +747,9 @@ function LobbyScreen({
           <h1>{room.isHost ? "Set the deck, then invite the room" : "Waiting for the host"}</h1>
           <p>
             {room.isHost
-              ? "Connect Spotify to import trusted metadata while the server prepares temporary room audio."
+              ? "Connect Spotify, choose a playlist, and invite your friends."
               : room.deck?.audioMode === "hosted"
-                ? "The host is preparing synchronized audio for everyone in the room."
+                ? "Pick your spot in the call while the host gets the room ready."
                 : "Keep your external voice or video call open for host-managed cues."}
           </p>
         </div>
@@ -526,7 +809,7 @@ function LobbyScreen({
                           ? `Connected${room.spotify.displayName ? ` as ${room.spotify.displayName}` : ""}`
                           : room.spotify.configured
                             ? "Host login required"
-                            : "Not configured on this server"}
+                            : "Spotify setup unavailable"}
                       </small>
                     </div>
                     {room.spotify.configured && !room.spotify.connected && (
@@ -534,108 +817,182 @@ function LobbyScreen({
                         className="secondary-button spotify-connect"
                         href={`/api/spotify/login?room=${encodeURIComponent(room.code)}`}
                       >
-                        Connect Spotify
+                        Log in with Spotify
                       </a>
                     )}
                   </div>
                   {room.spotify.connected && (
-                    <form
-                      className="playlist-import-form"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void run("spotify-import", () =>
-                          api("/api/spotify/import", {
-                            method: "POST",
-                            body: JSON.stringify({
-                              code: room.code,
-                              playlistUrl,
-                            }),
-                          }),
-                        );
-                      }}
-                    >
-                      <label className="field-label" htmlFor="spotify-playlist">
-                        Owned or collaborative playlist link
-                      </label>
-                      <div>
-                        <input
-                          id="spotify-playlist"
-                          onChange={(event) => setPlaylistUrl(event.target.value)}
-                          placeholder="https://open.spotify.com/playlist/…"
-                          type="url"
-                          value={playlistUrl}
-                        />
-                        <button
-                          className="secondary-button"
-                          disabled={
-                            Boolean(busy) || playlistUrl.trim().length === 0
-                          }
-                          type="submit"
-                        >
-                          {busy === "spotify-import"
-                            ? "Reading playlist…"
-                            : "Import & prepare"}
-                        </button>
+                    <div className="spotify-library">
+                      <div className="spotify-library__heading">
+                        <div>
+                          <strong>Your Spotify playlists</strong>
+                          <small>
+                            Choose one you own or collaborate on.
+                          </small>
+                        </div>
+                        {spotifyPlaylists.length > 5 && (
+                          <input
+                            aria-label="Search Spotify playlists"
+                            onChange={(event) =>
+                              setPlaylistSearch(event.target.value)
+                            }
+                            placeholder="Search playlists"
+                            type="search"
+                            value={playlistSearch}
+                          />
+                        )}
                       </div>
-                    </form>
+                      {spotifyPlaylistsStatus === "loading" && (
+                        <div
+                          className="spotify-library__message"
+                          role="status"
+                        >
+                          <span className="loading-pulse" />
+                          Loading your playlists…
+                        </div>
+                      )}
+                      {spotifyPlaylistsStatus === "error" && (
+                        <div className="spotify-library__message">
+                          Spotify could not load the library. Reconnect or try
+                          again.
+                        </div>
+                      )}
+                      {spotifyPlaylistsStatus === "ready" &&
+                        spotifyPlaylists.length === 0 && (
+                          <div className="spotify-library__message">
+                            No playlists were returned for this Spotify
+                            account.
+                          </div>
+                        )}
+                      {spotifyPlaylistsStatus === "ready" &&
+                        spotifyPlaylists.length > 0 &&
+                        visibleSpotifyPlaylists.length === 0 && (
+                          <div className="spotify-library__message">
+                            No playlists match “{playlistSearch.trim()}”.
+                          </div>
+                        )}
+                      {visibleSpotifyPlaylists.length > 0 && (
+                        <div className="spotify-playlist-list">
+                          {visibleSpotifyPlaylists.map((playlist) => {
+                            const action = `spotify-import-${playlist.id}`;
+                            return (
+                              <article
+                                className={`spotify-playlist${playlist.eligible ? "" : " is-ineligible"}`}
+                                key={playlist.id}
+                              >
+                                <a
+                                  aria-label={`Open ${playlist.name} in Spotify`}
+                                  className="spotify-playlist__cover"
+                                  href={playlist.spotifyUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  {playlist.imageUrl ? (
+                                    <img
+                                      alt=""
+                                      loading="lazy"
+                                      src={playlist.imageUrl}
+                                    />
+                                  ) : (
+                                    <Waveform aria-hidden="true" />
+                                  )}
+                                </a>
+                                <div className="spotify-playlist__details">
+                                  <strong title={playlist.name}>
+                                    {playlist.name}
+                                  </strong>
+                                  <span>
+                                    {playlist.trackCount}{" "}
+                                    {playlist.trackCount === 1
+                                      ? "track"
+                                      : "tracks"}{" "}
+                                    · {playlist.ownerName}
+                                  </span>
+                                  {!playlist.eligible && (
+                                    <small>
+                                      Followed playlist · Spotify does not
+                                      permit track import
+                                    </small>
+                                  )}
+                                </div>
+                                <button
+                                  className="secondary-button"
+                                  disabled={Boolean(busy) || !playlist.eligible}
+                                  onClick={() =>
+                                    void run(action, () =>
+                                      api("/api/spotify/import", {
+                                        method: "POST",
+                                        body: JSON.stringify({
+                                          code: room.code,
+                                          playlistUrl: `spotify:playlist:${playlist.id}`,
+                                        }),
+                                      }),
+                                    )
+                                  }
+                                  type="button"
+                                >
+                                  {busy === action
+                                    ? "Importing…"
+                                    : playlist.eligible
+                                      ? "Use playlist"
+                                      : "Read-only"}
+                                </button>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      )}
+                      <details className="spotify-link-fallback">
+                        <summary>Paste a playlist link instead</summary>
+                        <form
+                          className="playlist-import-form"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void run("spotify-import", () =>
+                              api("/api/spotify/import", {
+                                method: "POST",
+                                body: JSON.stringify({
+                                  code: room.code,
+                                  playlistUrl,
+                                }),
+                              }),
+                            );
+                          }}
+                        >
+                          <label
+                            className="field-label"
+                            htmlFor="spotify-playlist"
+                          >
+                            Owned or collaborative playlist link
+                          </label>
+                          <div>
+                            <input
+                              id="spotify-playlist"
+                              onChange={(event) =>
+                                setPlaylistUrl(event.target.value)
+                              }
+                              placeholder="https://open.spotify.com/playlist/…"
+                              type="url"
+                              value={playlistUrl}
+                            />
+                            <button
+                              className="secondary-button"
+                              disabled={
+                                Boolean(busy) ||
+                                playlistUrl.trim().length === 0
+                              }
+                              type="submit"
+                            >
+                              {busy === "spotify-import"
+                                ? "Reading playlist…"
+                                : "Use playlist"}
+                            </button>
+                          </div>
+                        </form>
+                      </details>
+                    </div>
                   )}
                 </div>
-
-                {preparation && (
-                  <div
-                    className={`preparation-card preparation-card--${preparation.status}`}
-                    aria-live="polite"
-                  >
-                    <div className="preparation-card__heading">
-                      <strong>
-                        {preparation.status === "ready"
-                          ? "Room audio ready"
-                          : preparation.status === "failed"
-                            ? "Preparation needs attention"
-                            : "Preparing temporary MP3 files"}
-                      </strong>
-                      <span>
-                        {preparation.processed} / {preparation.total}
-                      </span>
-                    </div>
-                    <div
-                      className="preparation-progress"
-                      role="progressbar"
-                      aria-valuemax={preparation.total}
-                      aria-valuemin={0}
-                      aria-valuenow={preparation.processed}
-                    >
-                      <span style={{ width: `${progressPercent}%` }} />
-                    </div>
-                    <div className="preparation-card__details">
-                      <span>{preparation.readyCount} ready</span>
-                      <span>{preparation.failedCount} skipped</span>
-                      <small>{preparation.message}</small>
-                    </div>
-                    {preparation.failures.length > 0 && (
-                      <details className="failed-tracks">
-                        <summary>
-                          Excluded tracks ({preparation.failures.length})
-                        </summary>
-                        <div className="failed-tracks__list">
-                          {preparation.failures.map((failure) => (
-                            <div key={failure.id}>
-                              <span>
-                                <strong>{failure.title}</strong>
-                                <small>{failure.artist}</small>
-                              </span>
-                              <em>{failure.reason}</em>
-                            </div>
-                          ))}
-                        </div>
-                        <p>
-                          These tracks could not be prepared and will not appear
-                          in the game.
-                        </p>
-                      </details>
-                    )}
-                  </div>
-                )}
 
                 <div className="deck-actions">
                   <label className="secondary-button file-button">
@@ -651,10 +1008,29 @@ function LobbyScreen({
                     <button
                       className="secondary-button"
                       disabled={Boolean(busy)}
+                      onClick={() =>
+                        run("hosted-demo", () =>
+                          api("/api/demo/hosted", {
+                            method: "POST",
+                            body: JSON.stringify({ code: room.code }),
+                          }),
+                        )
+                      }
+                      type="button"
+                    >
+                      {busy === "hosted-demo"
+                        ? "Generating audio…"
+                        : "Use hosted audio demo"}
+                    </button>
+                  )}
+                  {config.demoMode && (
+                    <button
+                      className="secondary-button"
+                      disabled={Boolean(busy)}
                       onClick={() => run("demo", () => command("useDemoDeck"))}
                       type="button"
                     >
-                      Use demo deck
+                      Use external demo
                     </button>
                   )}
                   <a className="text-link" download href="/deck-template.csv">
@@ -664,65 +1040,33 @@ function LobbyScreen({
                 </div>
                 {room.deck && (
                   <div className="deck-summary">
-                    <strong>{room.deck.trackCount} unique tracks</strong>
+                    <strong>
+                      {room.deck.ready ? "Ready to play" : "Getting the music ready"}
+                    </strong>
                     <span>
                       {room.deck.ready
-                        ? preparation?.status === "processing"
-                          ? "Enough are ready—you can start while the rest finish"
-                          : `${room.rules.deckSize} will be shuffled into the game`
-                        : `${room.rules.deckSize - room.deck.trackCount} more required`}
+                        ? "Start whenever everyone has joined."
+                        : "The start button will unlock automatically."}
                     </span>
                   </div>
-                )}
-                {room.deckReview && (
-                  <details className="year-review">
-                    <summary>Review album years ({room.deckReview.length})</summary>
-                    <div className="year-review__list">
-                      {room.deckReview.map((track) => (
-                        <label key={track.id}>
-                          <span>
-                            <strong>{track.title}</strong>
-                            <small>{track.artist}</small>
-                          </span>
-                          <input
-                            aria-label={`Year for ${track.title}`}
-                            defaultValue={track.year}
-                            inputMode="numeric"
-                            max="2100"
-                            min="1900"
-                            onBlur={(event) => {
-                              const year = Number(event.target.value);
-                              if (year !== track.year) {
-                                run(`year-${track.id}`, () =>
-                                  command("overrideYear", { trackId: track.id, year }),
-                                );
-                              }
-                            }}
-                            type="number"
-                          />
-                        </label>
-                      ))}
-                    </div>
-                  </details>
                 )}
               </>
             ) : (
               <div className="waiting-card">
                 {room.deck ? (
                   <>
-                    {preparation?.status === "processing" ? (
-                      <Waveform aria-hidden="true" />
-                    ) : (
+                    {room.deck.ready ? (
                       <Check weight="bold" aria-hidden="true" />
+                    ) : (
+                      <Waveform aria-hidden="true" />
                     )}
                     <strong>
-                      {preparation?.status === "processing"
-                        ? `${preparation.readyCount} of ${preparation.total} tracks prepared`
-                        : `${room.deck.trackCount} tracks ready`}
+                      {room.deck.ready ? "Ready to play" : "Almost ready"}
                     </strong>
                     <span>
-                      {preparation?.message ??
-                        "Only the host can review the mystery deck."}
+                      {room.deck.ready
+                        ? "The host can start when everyone is here."
+                        : "Make sure everyone has joined the room."}
                     </span>
                   </>
                 ) : (
@@ -741,7 +1085,10 @@ function LobbyScreen({
           <button
             className="primary-button lobby-start"
             disabled={!canStart || Boolean(busy)}
-            onClick={() => run("start", () => command("startGame"))}
+            onClick={() => {
+              primeRoomAudio();
+              void run("start", () => command("startGame"));
+            }}
             type="button"
           >
             <span>{busy === "start" ? "Shuffling…" : "Lock room & start"}</span>
@@ -788,17 +1135,25 @@ function KnownCard({
 function MysteryCard({ current }: { current: CurrentRoundSnapshot }) {
   const revealed = current.phase === "revealed";
   const correct = current.outcome?.correct;
+  const stolen = Boolean(current.outcome?.winningChallengePlayerId);
   return (
     <article
       className={`mystery-card ${revealed ? "mystery-card--revealed" : ""} ${
-        revealed && !correct ? "mystery-card--incorrect" : ""
+        revealed && !correct && !stolen ? "mystery-card--incorrect" : ""
+      } ${stolen ? "mystery-card--stolen" : ""
       }`}
     >
       {revealed ? (
         <>
-          {correct ? <Check weight="bold" aria-hidden="true" /> : <X weight="bold" aria-hidden="true" />}
+          {correct ? (
+            <Check weight="bold" aria-hidden="true" />
+          ) : stolen ? (
+            <ArrowsClockwise weight="bold" aria-hidden="true" />
+          ) : (
+            <X weight="bold" aria-hidden="true" />
+          )}
           <strong>{current.track?.year ?? "—"}</strong>
-          <span>{correct ? "Correct" : "Wrong gap"}</span>
+          <span>{correct ? "Correct" : stolen ? "Stolen" : "Wrong gap"}</span>
         </>
       ) : (
         <>
@@ -821,17 +1176,32 @@ function gapLabel(timeline: PublicTrack[], index: number): string {
 function MainTimeline({
   game,
   timeline,
-  canSelect,
+  players,
+  selectionMode,
+  viewerId,
   onSelect,
 }: {
   game: ActiveGame;
   timeline: PublicTrack[];
-  canSelect: boolean;
+  players: RoomPlayerSnapshot[];
+  selectionMode: "placement" | "challenge" | "none";
+  viewerId: string;
   onSelect: (index: number) => void;
 }) {
   const nodes: ReactNode[] = [];
   for (let index = 0; index <= timeline.length; index += 1) {
     const selected = game.current.selectedGap === index;
+    const challenge = game.current.challenges.find(
+      (entry) => entry.gapIndex === index,
+    );
+    const challenger = challenge
+      ? players.find((player) => player.id === challenge.playerId)
+      : null;
+    const canSelect =
+      !selected &&
+      (selectionMode === "placement" ||
+        (selectionMode === "challenge" &&
+          (!challenge || challenge.playerId === viewerId)));
     if (selected) {
       nodes.push(
         <div className="gap-slot gap-slot--selected" key={`gap-${index}`}>
@@ -843,14 +1213,25 @@ function MainTimeline({
     } else {
       nodes.push(
         <button
-          aria-label={gapLabel(timeline, index)}
-          className="gap-slot"
+          aria-label={
+            challenger
+              ? `${challenger.displayName} challenged ${gapLabel(timeline, index)}`
+              : gapLabel(timeline, index)
+          }
+          className={`gap-slot ${challenge ? "gap-slot--challenged" : ""}`}
           disabled={!canSelect}
           key={`gap-${index}`}
           onClick={() => onSelect(index)}
           type="button"
         >
-          <Plus weight="light" aria-hidden="true" />
+          {challenger ? (
+            <span className="challenge-marker">
+              <strong>{challenger.displayName}</strong>
+              <small>HITSTER</small>
+            </span>
+          ) : (
+            <Plus weight="light" aria-hidden="true" />
+          )}
           <span>{gapLabel(timeline, index)}</span>
         </button>,
       );
@@ -990,16 +1371,16 @@ function HostedCue({
     <aside className="host-cue hosted-cue">
       <div>
         <span className="eyebrow">Private room audio</span>
-        <strong>Mystery track loaded from the server</strong>
+        <strong>Mystery track</strong>
         <small>No title, artist, or cover is exposed before reveal.</small>
       </div>
       <div className="host-cue__source hosted-cue__readiness">
         <span>
           {audio.loading
-            ? "Downloading and decoding this round…"
+            ? "Cueing this round…"
             : audio.ready
               ? "Your audio is ready"
-              : "Enable audio to preload this round"}
+              : "Waiting for the mystery track"}
         </span>
         <em className={audio.allReady ? "is-ready" : ""}>
           {audio.readyCount} / {audio.requiredCount} players ready
@@ -1014,7 +1395,7 @@ function HostedCue({
             type="button"
           >
             <Headphones weight="fill" />
-            {audio.error ? "Retry audio" : "Enable audio"}
+            {audio.enabled ? "Retry audio" : "Start audio"}
           </button>
         ) : isHost ? (
           <>
@@ -1126,8 +1507,18 @@ function GameScreen({
   const activePlayer = room.players.find((player) => player.id === game.activePlayerId);
   const timeline = game.timelines[game.activePlayerId] ?? [];
   const isActive = room.viewerId === game.activePlayerId;
+  const challenging = game.current.phase === "challenging";
   const revealed = game.current.phase === "revealed";
   const correct = game.current.outcome?.correct;
+  const awardedPlayer = game.current.outcome?.awardedPlayerId
+    ? room.players.find(
+        (player) => player.id === game.current.outcome?.awardedPlayerId,
+      )
+    : null;
+  const viewerChallenge = game.current.challenges.find(
+    (challenge) => challenge.playerId === room.viewerId,
+  );
+  const viewerTokens = game.challengeTokens[room.viewerId] ?? 0;
 
   async function run(label: string, callback: AsyncCallback) {
     setBusy(label);
@@ -1144,9 +1535,13 @@ function GameScreen({
   const stateLabel = revealed
     ? correct
       ? `Correct · ${game.current.track?.year ?? "—"}`
-      : `${game.current.track?.year ?? "—"} · Wrong gap`
+      : awardedPlayer
+        ? `${game.current.track?.year ?? "—"} · ${awardedPlayer.displayName} stole it`
+        : `${game.current.track?.year ?? "—"} · No correct challenge`
+    : challenging
+      ? "Challenges open"
     : synchronizedAudio.hosted && !synchronizedAudio.enabled
-      ? "Enable audio"
+      ? "Start audio"
       : synchronizedAudio.hosted && synchronizedAudio.loading
         ? "Loading round"
         : synchronizedAudio.hosted && !synchronizedAudio.allReady
@@ -1157,8 +1552,21 @@ function GameScreen({
         ? "Paused"
         : "Waiting for host";
 
-  const canSelect = isActive && !revealed;
-  const canLock = isActive && !revealed && room.playback.status === "playing";
+  const canChallenge =
+    challenging &&
+    !isActive &&
+    (viewerTokens > 0 || Boolean(viewerChallenge));
+  const selectionMode: "placement" | "challenge" | "none" =
+    isActive && game.current.phase === "listening"
+      ? "placement"
+      : canChallenge
+        ? "challenge"
+        : "none";
+  const canLock =
+    isActive &&
+    game.current.phase === "listening" &&
+    room.playback.status === "playing";
+  const canReveal = challenging && (isActive || room.isHost);
   const canContinue = revealed && (isActive || room.isHost);
 
   if (!activePlayer) {
@@ -1199,26 +1607,35 @@ function GameScreen({
           <CaretDown aria-hidden="true" />
         </div>
       </BrandHeader>
-      <PlayerStrip players={room.players} />
-      <HostCue
-        activeIsHost={room.hostId === game.activePlayerId}
-        busy={busy}
-        command={command}
-        cue={room.hostCue}
-        playback={room.playback}
-        run={run}
+      <PlayerStrip
+        challengeTokens={game.challengeTokens}
+        players={room.players}
       />
-      <HostedCue
-        audio={synchronizedAudio}
-        busy={busy}
-        command={command}
-        isHost={room.isHost}
-        playback={room.playback}
-        run={run}
-      />
+      {game.current.phase === "listening" && (
+        <>
+          <HostCue
+            activeIsHost={room.hostId === game.activePlayerId}
+            busy={busy}
+            command={command}
+            cue={room.hostCue}
+            playback={room.playback}
+            run={run}
+          />
+          <HostedCue
+            audio={synchronizedAudio}
+            busy={busy}
+            command={command}
+            isHost={room.isHost}
+            playback={room.playback}
+            run={run}
+          />
+        </>
+      )}
 
       <section
-        className={`round-stage ${revealed ? "round-stage--revealed" : ""} ${
+        className={`round-stage ${challenging ? "round-stage--challenging" : ""} ${
+          revealed ? "round-stage--revealed" : ""
+        } ${
           revealed && !correct ? "round-stage--incorrect" : ""
         }`}
       >
@@ -1228,7 +1645,11 @@ function GameScreen({
             {revealed
               ? correct
                 ? "Great placement"
-                : "Not this time"
+                : awardedPlayer
+                  ? `${awardedPlayer.displayName} stole the card`
+                  : "Not this time"
+              : challenging
+                ? `Challenge ${activePlayer.displayName}’s placement`
               : `${activePlayer.displayName}’s turn`}
           </h1>
           <span aria-hidden="true" />
@@ -1250,22 +1671,45 @@ function GameScreen({
 
         <div className="timeline-scroller">
           <MainTimeline
-            canSelect={canSelect}
             game={game}
-            onSelect={(gapIndex) => run("gap", () => command("selectGap", { gapIndex }))}
+            onSelect={(gapIndex) =>
+              run(
+                selectionMode === "challenge" ? "challenge" : "gap",
+                () =>
+                  command(
+                    selectionMode === "challenge"
+                      ? "challengeGap"
+                      : "selectGap",
+                    { gapIndex },
+                  ),
+              )
+            }
+            players={room.players}
+            selectionMode={selectionMode}
             timeline={timeline}
+            viewerId={room.viewerId}
           />
         </div>
 
         <div className="round-actions">
           <button
             className="lock-button"
-            disabled={Boolean(busy) || (revealed ? !canContinue : !canLock)}
-            onClick={() =>
-              run(revealed ? "next" : "lock", () =>
-                command(revealed ? "nextRound" : "lockIn"),
-              )
+            disabled={
+              Boolean(busy) ||
+              (revealed
+                ? !canContinue
+                : challenging
+                  ? !canReveal
+                  : !canLock)
             }
+            onClick={() => {
+              const commandName = revealed
+                ? "nextRound"
+                : challenging
+                  ? "reveal"
+                  : "lockIn";
+              void run(commandName, () => command(commandName));
+            }}
             type="button"
           >
             <span>
@@ -1273,20 +1717,45 @@ function GameScreen({
                 ? canContinue
                   ? "Next turn"
                   : "Waiting"
+                : challenging
+                  ? canReveal
+                    ? "Reveal answer"
+                    : viewerChallenge
+                      ? "Challenge placed"
+                      : canChallenge
+                        ? "Choose another gap"
+                        : "Waiting for reveal"
                 : isActive
                   ? "Lock in"
                   : `Waiting for ${activePlayer.displayName}`}
             </span>
             <ArrowRight weight="bold" aria-hidden="true" />
           </button>
-          {!revealed && isActive && (
+          {game.current.phase === "listening" && isActive && (
             <span className="selection-status">
               Selected: {gapLabel(timeline, game.current.selectedGap)}
             </span>
           )}
-          {!isActive && !revealed && (
+          {game.current.phase === "listening" && !isActive && (
             <span className="selection-status">
               {activePlayer.displayName} is choosing a position.
+            </span>
+          )}
+          {challenging && !isActive && (
+            <span className="selection-status">
+              {viewerChallenge
+                ? `Your HITSTER token is on ${gapLabel(
+                    timeline,
+                    viewerChallenge.gapIndex,
+                  )}.`
+                : viewerTokens > 0
+                  ? "Think it is wrong? Choose a different gap."
+                  : "You have no HITSTER tokens left."}
+            </span>
+          )}
+          {challenging && isActive && (
+            <span className="selection-status">
+              Give opponents a chance to challenge before revealing.
             </span>
           )}
         </div>
@@ -1375,6 +1844,34 @@ function ResultsScreen({
   );
 }
 
+function BetweenRoundsScreen({
+  room,
+  connected,
+}: {
+  room: FinishedRoom;
+  connected: boolean;
+}) {
+  const activePlayer = room.players.find(
+    (player) => player.id === room.game.activePlayerId,
+  );
+
+  return (
+    <main className="game-shell">
+      <BrandHeader room={room} connected={connected} />
+      <PlayerStrip players={room.players} />
+      <section className="between-rounds-stage">
+        <Waveform aria-hidden="true" />
+        <strong>Next track is cueing…</strong>
+        <span>
+          {activePlayer
+            ? `${activePlayer.displayName} is up next.`
+            : "The next turn will begin in a moment."}
+        </span>
+      </section>
+    </main>
+  );
+}
+
 export function App() {
   const [session, setSession] = useState<SessionResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1382,10 +1879,46 @@ export function App() {
   const roomConnection = useRoom(Boolean(session?.profile));
 
   useEffect(() => {
-    api<SessionResponse>("/api/session")
-      .then(setSession)
-      .catch((error: unknown) => setFatalError(errorMessage(error)))
-      .finally(() => setLoading(false));
+    let active = true;
+
+    async function openSession() {
+      try {
+        let loadedSession = await api<SessionResponse>("/api/session");
+        if (loadedSession.profile) {
+          rememberProfile(loadedSession.profile);
+        } else {
+          const rememberedProfile = readRememberedProfile();
+          if (rememberedProfile) {
+            try {
+              const restored = await api<{ profile: PlayerProfile }>(
+                "/api/profile",
+                {
+                  method: "POST",
+                  body: JSON.stringify(rememberedProfile),
+                },
+              );
+              loadedSession = {
+                ...loadedSession,
+                profile: restored.profile,
+              };
+              rememberProfile(restored.profile);
+            } catch {
+              // A stale local profile should not prevent the entry screen opening.
+            }
+          }
+        }
+        if (active) setSession(loadedSession);
+      } catch (error) {
+        if (active) setFatalError(errorMessage(error));
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void openSession();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const content = useMemo(() => {
@@ -1416,9 +1949,10 @@ export function App() {
     if (!session.profile) {
       return (
         <ProfileScreen
-          onReady={(profile) =>
-            setSession((value) => (value ? { ...value, profile } : value))
-          }
+          onReady={(profile) => {
+            rememberProfile(profile);
+            setSession((value) => (value ? { ...value, profile } : value));
+          }}
         />
       );
     }
@@ -1431,6 +1965,7 @@ export function App() {
           joinRoom={roomConnection.joinRoom}
           onLogout={async () => {
             await api<null>("/api/logout", { method: "POST" });
+            forgetProfile();
             setSession((value) =>
               value ? { ...value, profile: null, roomCode: null } : value,
             );
@@ -1453,6 +1988,18 @@ export function App() {
       return (
         <ResultsScreen
           command={roomConnection.command}
+          connected={roomConnection.connected}
+          room={roomConnection.room}
+        />
+      );
+    }
+    if (
+      roomConnection.room.status === "playing" &&
+      hasGame(roomConnection.room) &&
+      !roomConnection.room.game.current
+    ) {
+      return (
+        <BetweenRoundsScreen
           connected={roomConnection.connected}
           room={roomConnection.room}
         />

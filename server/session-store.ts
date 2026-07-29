@@ -67,6 +67,7 @@ export class SessionStore {
   readonly #secret: string;
   readonly #secure: boolean;
   readonly #sessions = new Map<string, Session>();
+  #lastPrunedAt = 0;
 
   constructor({ secret, secure }: { secret: string; secure: boolean }) {
     this.#secret = secret;
@@ -105,6 +106,15 @@ export class SessionStore {
 
   middleware(): RequestHandler {
     return (request: Request, response: Response, next: NextFunction) => {
+      const now = Date.now();
+      if (now - this.#lastPrunedAt > 60_000) {
+        this.#lastPrunedAt = now;
+        for (const [sessionId, storedSession] of this.#sessions) {
+          if (now - storedSession.touchedAt > MAX_AGE_SECONDS * 1000) {
+            this.#sessions.delete(sessionId);
+          }
+        }
+      }
       let id = this.#readId(request.headers.cookie);
       let session = id ? this.#sessions.get(id) : undefined;
 
@@ -112,8 +122,8 @@ export class SessionStore {
         id = randomBytes(24).toString("base64url");
         session = {
           id,
-          createdAt: Date.now(),
-          touchedAt: Date.now(),
+          createdAt: now,
+          touchedAt: now,
           profile: null,
           roomCode: null,
           spotify: null,
@@ -122,7 +132,7 @@ export class SessionStore {
         this.#sessions.set(id, session);
         response.setHeader("Set-Cookie", this.#cookie(this.#serialize(id)));
       } else {
-        session.touchedAt = Date.now();
+        session.touchedAt = now;
       }
 
       request.session = session;

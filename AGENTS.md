@@ -27,6 +27,13 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Begin a hosted game once at least 50 unique tracks have been prepared. Track
   client readiness before host playback, preserve temporary audio for rematches,
   and delete it when the room closes, expires, or the server restarts.
+- Do not blindly trust the first YouTube search result. Rank several candidates
+  against Spotify title, artist, and duration metadata, reject risky variants,
+  and keep every failed attempt outside the playable deck. Hosts can cancel a
+  preparation or retry one/all excluded tracks.
+- Keep a credential-free hosted demo in development mode. It generates
+  temporary tones with `ffmpeg` so the preparation, streaming, readiness,
+  playback, and cleanup flow can be verified without Spotify or YouTube access.
 - This is an intentionally private, non-commercial prototype. The user accepts
   the documented Spotify and YouTube policy risks for this happy-path build;
   keep those risks explicit in project documentation.

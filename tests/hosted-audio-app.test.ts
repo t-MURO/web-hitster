@@ -10,7 +10,6 @@ import type {
   RoomActionResult,
 } from "../shared/types.js";
 import { createApplication } from "../server/create-app.js";
-import { createDemoDeck } from "../server/deck-parser.js";
 import {
   MediaLibrary,
   type MediaCommandRunner,
@@ -73,12 +72,11 @@ function action(
 
 test("only room members can range-stream the opaque current-round MP3", async (t) => {
   const parent = await mkdtemp(path.join(os.tmpdir(), "webstar-audio-app-"));
-  const run: MediaCommandRunner = async (_executable, arguments_) => {
-    const outputIndex = arguments_.indexOf("--output");
-    const template = required(arguments_[outputIndex + 1], "output template");
-    const filePath = template.replace("%(ext)s", "mp3");
+  const run: MediaCommandRunner = async (executable, arguments_) => {
+    assert.equal(executable, "ffmpeg");
+    const filePath = required(arguments_.at(-1), "output path");
     await writeFile(filePath, Buffer.from("0123456789"));
-    return { stdout: `youtube-id\n${filePath}\n`, stderr: "" };
+    return { stdout: "", stderr: "" };
   };
   const media = new MediaLibrary({
     root: path.join(parent, "audio"),
@@ -134,26 +132,28 @@ test("only room members can range-stream the opaque current-round MP3", async (t
     application.sessions.fromCookieHeader(hostCookie),
     "host session",
   ).id;
-  const tracks = createDemoDeck().slice(0, 12);
-  const importId = application.rooms.beginSpotifyDeck({
-    code,
-    sessionId: hostId,
-    name: "Hosted deck",
-    total: tracks.length,
-  });
-  await media.preparePlaylist({
-    roomCode: code,
-    tracks,
-    onResult: ({ track, error }) => {
-      application.rooms.recordSpotifyPreparation({
-        code,
-        importId,
-        track,
-        error,
-      });
+  const demoResponse = await fetch(`${baseUrl}/api/demo/hosted`, {
+    method: "POST",
+    headers: {
+      Cookie: hostCookie,
+      "Content-Type": "application/json",
     },
+    body: JSON.stringify({ code }),
   });
-  application.rooms.completeSpotifyPreparation({ code, importId });
+  assert.equal(demoResponse.status, 202);
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (
+      application.rooms.snapshot(code, hostId).deck?.preparation?.status !==
+      "processing"
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(
+    application.rooms.snapshot(code, hostId).deck?.preparation?.status,
+    "ready",
+  );
   const started = await action(hostSocket, "command", {
     code,
     type: "startGame",

@@ -342,16 +342,21 @@ a {
 
 .avatar-picker > div {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
 }
 
 .avatar-choice {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
   width: 64px;
   height: 64px;
   padding: 3px;
   border: 1px solid #494943;
   border-radius: 50%;
   background: #101212;
+  color: var(--cream);
   cursor: pointer;
 }
 
@@ -366,6 +371,30 @@ a {
 .avatar-choice.is-selected {
   border-color: var(--amber);
   box-shadow: 0 0 0 4px rgb(233 163 61 / 10%);
+}
+
+.avatar-upload {
+  position: relative;
+  overflow: hidden;
+}
+
+.avatar-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.avatar-upload svg {
+  width: 25px;
+  height: 25px;
+}
+
+.avatar-upload:hover {
+  border-color: #7e7b72;
 }
 
 .primary-button,
@@ -610,6 +639,25 @@ a {
   color: var(--danger);
 }
 
+.token-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--amber);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+
+.token-label i {
+  width: 9px;
+  height: 9px;
+  border: 1px solid #f2bd62;
+  border-radius: 50%;
+  background: #6a471c;
+  box-shadow: inset 0 0 0 2px #c78c34;
+}
+
 .lobby-content {
   min-height: calc(100vh - 158px);
   padding: 34px 48px 48px;
@@ -779,8 +827,207 @@ a {
 .spotify-connect {
   min-height: 40px;
   padding-inline: 16px;
+  border-color: #69dd89;
+  background: #69dd89;
+  color: #07130b;
   font-size: 12px;
   text-decoration: none;
+}
+
+.spotify-library {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid #2d3d36;
+}
+
+.spotify-library__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.spotify-library__heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.spotify-library__heading strong {
+  color: var(--cream);
+  font-size: 13px;
+}
+
+.spotify-library__heading small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.spotify-library__heading input {
+  width: 190px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #46524b;
+  border-radius: 6px;
+  background: #0c1110;
+  color: var(--cream);
+  font-size: 11px;
+}
+
+.spotify-library__message {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px;
+  border: 1px dashed #3c4b44;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.loading-pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse 1.2s infinite;
+}
+
+.spotify-playlist-list {
+  max-height: 310px;
+  display: grid;
+  overflow-y: auto;
+  border: 1px solid #34453d;
+  border-radius: 7px;
+  background: #0c1110;
+}
+
+.spotify-playlist {
+  min-width: 0;
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px;
+  border-bottom: 1px solid #27322d;
+}
+
+.spotify-playlist:last-child {
+  border-bottom: 0;
+}
+
+.spotify-playlist.is-ineligible {
+  opacity: 0.58;
+}
+
+.spotify-playlist__cover {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #3b4942;
+  border-radius: 5px;
+  background: #17201c;
+  color: var(--green);
+}
+
+.spotify-playlist__cover img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.spotify-playlist__cover svg {
+  width: 24px;
+  height: 24px;
+}
+
+.spotify-playlist__details {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.spotify-playlist__details strong {
+  overflow: hidden;
+  color: var(--cream);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spotify-playlist__details span,
+.spotify-playlist__details small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spotify-playlist__details small {
+  color: #b18b68;
+}
+
+.spotify-playlist .secondary-button {
+  min-height: 36px;
+  padding-inline: 12px;
+  font-size: 10px;
+}
+
+.spotify-link-fallback {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.spotify-link-fallback summary {
+  width: max-content;
+  cursor: pointer;
+  color: #b8b2a7;
+}
+
+.spotify-link-fallback[open] summary {
+  margin-bottom: 12px;
+}
+
+.processor-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding-top: 10px;
+  border-top: 1px solid #2d3d36;
+}
+
+.processor-status span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.processor-status i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.processor-status .is-ready {
+  color: var(--green);
+}
+
+.processor-status .is-missing {
+  color: var(--danger);
 }
 
 .playlist-import-form {
@@ -882,6 +1129,25 @@ a {
   background: var(--green);
 }
 
+.text-action {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font-size: 10px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.text-action--danger {
+  color: var(--danger);
+}
+
+.text-action:disabled {
+  opacity: 0.45;
+}
+
 .failed-tracks {
   border-top: 1px solid #4a382c;
 }
@@ -892,6 +1158,13 @@ a {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.retry-all {
+  min-height: 34px;
+  margin-top: 10px;
+  padding-inline: 12px;
+  font-size: 10px;
 }
 
 .failed-tracks__list {
@@ -906,7 +1179,10 @@ a {
 .failed-tracks__list > div {
   min-height: 50px;
   display: grid;
-  grid-template-columns: minmax(180px, 0.8fr) minmax(240px, 1.2fr);
+  grid-template-columns:
+    minmax(160px, 0.8fr)
+    minmax(210px, 1.2fr)
+    auto;
   align-items: center;
   gap: 16px;
   padding: 8px 10px;
@@ -923,12 +1199,35 @@ a {
   gap: 2px;
 }
 
+.failed-tracks__list .failure-reason {
+  gap: 3px;
+}
+
+.failed-tracks__list .failure-reason small {
+  color: #8f625e;
+}
+
 .failed-tracks__list strong,
 .failed-tracks__list small,
 .failed-tracks__list em {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.failed-tracks__list > div > button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid #63413d;
+  border-radius: 4px;
+  background: #211514;
+  color: #e0aaa4;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.failed-tracks__list > div > button:disabled {
+  opacity: 0.4;
 }
 
 .failed-tracks__list strong {
@@ -1433,6 +1732,48 @@ a {
   cursor: default;
 }
 
+.gap-slot--challenged {
+  border-style: solid;
+  border-color: #9a6bd1;
+  background: #19131f;
+  color: #cfa6ff;
+  opacity: 1 !important;
+}
+
+.gap-slot--challenged:not(:disabled):hover {
+  border-color: #d8b8ff;
+  color: #ead7ff;
+}
+
+.challenge-marker {
+  width: 66px;
+  height: 66px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 2px;
+  border: 2px solid #b787ee;
+  border-radius: 50%;
+  background: #251832;
+  color: #ead7ff;
+  text-align: center;
+}
+
+.challenge-marker strong {
+  max-width: 54px;
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.challenge-marker small {
+  color: #c895ff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
 .selection-caret {
   position: absolute;
   top: -13px;
@@ -1492,6 +1833,12 @@ a {
   box-shadow: inset 0 0 0 6px #211717;
 }
 
+.mystery-card--stolen {
+  border-color: #9a6bd1;
+  color: #c895ff;
+  box-shadow: inset 0 0 0 6px #211729;
+}
+
 .gap-slot__label {
   color: var(--amber-bright) !important;
   font-size: 10px !important;
@@ -1549,6 +1896,14 @@ a {
 
 .round-stage--revealed .listening-state {
   color: var(--green);
+}
+
+.round-stage--challenging .listening-state {
+  color: #c895ff;
+}
+
+.round-stage--challenging .turn-heading span {
+  background: #744d9d;
 }
 
 .round-stage--revealed .turn-heading span {
@@ -1756,6 +2111,29 @@ a {
 
 .loading-screen strong {
   color: var(--cream);
+}
+
+.between-rounds-stage {
+  min-height: calc(100vh - 140px);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 18px;
+  color: var(--amber);
+}
+
+.between-rounds-stage svg {
+  width: 54px;
+  height: 54px;
+}
+
+.between-rounds-stage strong {
+  color: var(--cream);
+  font-size: 22px;
+}
+
+.between-rounds-stage span {
+  color: var(--muted);
 }
 
 @keyframes pulse {

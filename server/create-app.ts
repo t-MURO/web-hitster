@@ -18,6 +18,7 @@ import {
   type RoomActionResponse,
 } from "../shared/types.js";
 import { loadConfig, validateConfig } from "./config.js";
+import { createDemoDeck } from "./deck-parser.js";
 import { MediaLibrary } from "./media-library.js";
 import { RoomManager } from "./room-manager.js";
 import { SessionStore } from "./session-store.js";
@@ -25,6 +26,7 @@ import { SpotifyService } from "./spotify-service.js";
 
 const PROJECT_ROOT = process.cwd();
 const AVATARS = new Set<string>(AVATAR_KEYS);
+const MAX_AVATAR_BYTES = 128 * 1024;
 
 interface CodedError extends Error {
   code?: string;
@@ -56,6 +58,32 @@ function safeName(value: unknown): string {
     );
   }
   return name;
+}
+
+function safeAvatarUrl(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string") {
+    throw codedError("Choose a valid profile photo.", "INVALID_PROFILE");
+  }
+
+  const match = value.match(
+    /^data:image\/(?:jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/,
+  );
+  if (!match?.[1]) {
+    throw codedError(
+      "Profile photos must be JPEG, PNG, or WebP images.",
+      "INVALID_PROFILE",
+    );
+  }
+
+  const bytes = Buffer.from(match[1], "base64");
+  if (bytes.length === 0 || bytes.length > MAX_AVATAR_BYTES) {
+    throw codedError(
+      "That profile photo is too large. Choose a smaller image.",
+      "INVALID_PROFILE",
+    );
+  }
+  return value;
 }
 
 function isRoomAction(value: unknown): value is RoomAction {
@@ -94,7 +122,7 @@ export async function createApplication({
       clientSecret: config.spotifyClientSecret ?? "",
       redirectUri:
         config.spotifyRedirectUri ??
-        `${config.publicBaseUrl}/api/spotify/callback`,
+        `${config.publicBaseUrl}/callback`,
     });
   const media =
     mediaLibrary ??
@@ -104,7 +132,7 @@ export async function createApplication({
         path.join(os.tmpdir(), `music-timeline-audio-${process.pid}`),
       downloaderPath: config.youtubeDownloaderPath ?? "yt-dlp",
       ffmpegPath: config.ffmpegPath ?? "ffmpeg",
-      bitrateKbps: config.audioBitrateKbps ?? 192,
+      bitrateKbps: config.audioBitrateKbps ?? 96,
       concurrency: config.audioPreparationConcurrency ?? 2,
     });
   await media.initialize();
@@ -183,6 +211,7 @@ export async function createApplication({
       request.session.profile = {
         displayName: safeName(request.body?.displayName),
         avatarKey: avatarKey as AvatarKey,
+        avatarUrl: safeAvatarUrl(request.body?.avatarUrl),
       };
       response.json({ profile: request.session.profile });
     } catch (error) {
@@ -205,6 +234,106 @@ export async function createApplication({
     }
   });
 
+  let mediaDiagnosticsCache:
+    | Awaited<ReturnType<MediaLibrary["diagnostics"]>>
+    | null = null;
+  let mediaDiagnosticsAt = 0;
+  app.get("/api/media/status", async (request, response, next) => {
+    try {
+      if (!request.session.roomCode) {
+        throw codedError(
+          "Create a room before checking its audio tools.",
+          "ROOM_REQUIRED",
+        );
+      }
+      rooms.assertHostLobby(request.session.roomCode, request.session.id);
+      if (
+        !mediaDiagnosticsCache ||
+        Date.now() - mediaDiagnosticsAt > 60_000
+      ) {
+        mediaDiagnosticsCache = await media.diagnostics();
+        mediaDiagnosticsAt = Date.now();
+      }
+      response.json(mediaDiagnosticsCache);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  function startHostedPreparation({
+    roomCode,
+    importId,
+    tracks,
+    source,
+    retry = false,
+    maximumSuccesses = config.deckSize,
+  }: {
+    roomCode: string;
+    importId: string;
+    tracks: ReturnType<typeof createDemoDeck>;
+    source: "spotify" | "hosted-demo";
+    retry?: boolean;
+    maximumSuccesses?: number;
+  }): void {
+    const onResult = ({
+      track,
+      error,
+    }: {
+      track: (typeof tracks)[number];
+      error: string | null;
+    }) => {
+      rooms.recordSpotifyPreparation({
+        code: roomCode,
+        importId,
+        track,
+        error,
+        retry,
+      });
+    };
+    const preparation = retry
+      ? source === "hosted-demo"
+        ? media.prepareAdditionalGenerated({
+            roomCode,
+            tracks,
+            onResult,
+            maximumSuccesses,
+          })
+        : media.prepareAdditional({
+            roomCode,
+            tracks,
+            onResult,
+            maximumSuccesses,
+          })
+      : source === "hosted-demo"
+        ? media.prepareGeneratedPlaylist({
+            roomCode,
+            tracks,
+            onResult,
+            maximumSuccesses,
+          })
+        : media.preparePlaylist({
+            roomCode,
+            tracks,
+            onResult,
+            maximumSuccesses,
+          });
+
+    void preparation
+      .then(() => {
+        rooms.completeSpotifyPreparation({ code: roomCode, importId });
+      })
+      .catch((error: unknown) => {
+        rooms.failSpotifyPreparation({
+          code: roomCode,
+          importId,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Audio preparation stopped unexpectedly.",
+        });
+      });
+  }
+
   app.get("/api/spotify/login", (request, response, next) => {
     try {
       const roomCode = String(request.query.room ?? request.session.roomCode ?? "")
@@ -223,9 +352,11 @@ export async function createApplication({
     }
   });
 
-  app.get("/api/spotify/callback", async (request, response, next) => {
+  app.get(
+    ["/callback", "/api/spotify/callback"],
+    async (request, response, next) => {
+    const attempt = request.session.spotifyOAuth;
     try {
-      const attempt = request.session.spotifyOAuth;
       request.session.spotifyOAuth = null;
       if (
         !attempt ||
@@ -254,9 +385,17 @@ export async function createApplication({
       request.session.spotify = await spotify.exchangeCode(code);
       response.redirect(`/room/${attempt.roomCode}?spotify=connected`);
     } catch (error) {
-      next(error);
+      if (attempt?.roomCode) {
+        const message = publicError(error).message.slice(0, 180);
+        response.redirect(
+          `/room/${attempt.roomCode}?spotify_error=${encodeURIComponent(message)}`,
+        );
+      } else {
+        next(error);
+      }
     }
-  });
+    },
+  );
 
   app.post("/api/spotify/disconnect", (request, response, next) => {
     try {
@@ -266,6 +405,28 @@ export async function createApplication({
       request.session.spotify = null;
       request.session.spotifyOAuth = null;
       response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/spotify/playlists", async (request, response, next) => {
+    try {
+      const roomCode = String(
+        request.query.code ?? request.session.roomCode ?? "",
+      )
+        .trim()
+        .toUpperCase();
+      rooms.assertHostLobby(roomCode, request.session.id);
+      if (!request.session.spotify) {
+        throw codedError(
+          "Connect Spotify before loading your playlists.",
+          "SPOTIFY_LOGIN_REQUIRED",
+        );
+      }
+      response.json({
+        playlists: await spotify.listPlaylists(request.session.spotify),
+      });
     } catch (error) {
       next(error);
     }
@@ -293,41 +454,103 @@ export async function createApplication({
         code: roomCode,
         sessionId: request.session.id,
         name: playlist.name,
-        total: playlist.tracks.length,
+        total: playlist.tracks.length + playlist.rejections.length,
+        failures: playlist.rejections,
       });
 
-      void media
-        .preparePlaylist({
-          roomCode,
-          tracks: playlist.tracks,
-          onResult: ({ track, error }) => {
-            rooms.recordSpotifyPreparation({
-              code: roomCode,
-              importId,
-              track,
-              error,
-            });
-          },
-        })
-        .then(() => {
-          rooms.completeSpotifyPreparation({ code: roomCode, importId });
-        })
-        .catch((error: unknown) => {
-          rooms.failSpotifyPreparation({
-            code: roomCode,
-            importId,
-            message:
-              error instanceof Error
-                ? error.message
-                : "Audio preparation stopped unexpectedly.",
-          });
-        });
+      startHostedPreparation({
+        roomCode,
+        importId,
+        tracks: playlist.tracks,
+        source: "spotify",
+      });
 
       response.status(202).json({
         accepted: true,
         name: playlist.name,
-        total: playlist.tracks.length,
+        total: playlist.tracks.length + playlist.rejections.length,
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/demo/hosted", (request, response, next) => {
+    try {
+      if (!config.demoMode) {
+        throw codedError(
+          "The hosted demo is disabled on this server.",
+          "DEMO_DISABLED",
+        );
+      }
+      const roomCode = String(
+        request.body?.code ?? request.session.roomCode ?? "",
+      )
+        .trim()
+        .toUpperCase();
+      const tracks = createDemoDeck();
+      const importId = rooms.beginHostedDemoDeck({
+        code: roomCode,
+        sessionId: request.session.id,
+        name: "Hosted audio · No Spotify required",
+        total: tracks.length,
+      });
+      startHostedPreparation({
+        roomCode,
+        importId,
+        tracks,
+        source: "hosted-demo",
+      });
+      response.status(202).json({ accepted: true, total: tracks.length });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/audio/retry", (request, response, next) => {
+    try {
+      const roomCode = String(
+        request.body?.code ?? request.session.roomCode ?? "",
+      )
+        .trim()
+        .toUpperCase();
+      const rawTrackIds = request.body?.trackIds;
+      const trackIds = Array.isArray(rawTrackIds)
+        ? rawTrackIds
+            .filter((value): value is string => typeof value === "string")
+            .slice(0, 200)
+        : undefined;
+      const retry = rooms.retryHostedFailures({
+        code: roomCode,
+        sessionId: request.session.id,
+        trackIds,
+      });
+      startHostedPreparation({
+        roomCode,
+        importId: retry.importId,
+        tracks: retry.tracks,
+        source: retry.source,
+        retry: true,
+        maximumSuccesses: retry.remainingCapacity,
+      });
+      response.status(202).json({
+        accepted: true,
+        total: retry.tracks.length,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/audio/cancel", (request, response, next) => {
+    try {
+      const roomCode = String(
+        request.body?.code ?? request.session.roomCode ?? "",
+      )
+        .trim()
+        .toUpperCase();
+      rooms.cancelHostedDeck(roomCode, request.session.id);
+      response.status(204).end();
     } catch (error) {
       next(error);
     }

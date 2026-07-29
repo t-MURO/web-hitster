@@ -191,10 +191,107 @@ test("failed Spotify matches are listed but excluded from the game deck", () => 
       title: failedTrack.title,
       artist: failedTrack.artist,
       reason: "YouTube returned no usable result.",
+      attempts: 1,
+      retryable: true,
     },
   ]);
   assert.equal(
     snapshot.deckReview?.some((track) => track.id === failedTrack.id),
     false,
+  );
+
+  const retry = manager.retryHostedFailures({
+    code,
+    sessionId: "host",
+    trackIds: [failedTrack.id],
+  });
+  assert.deepEqual(
+    retry.tracks.map((track) => track.id),
+    [failedTrack.id],
+  );
+  manager.recordSpotifyPreparation({
+    code,
+    importId,
+    track: retry.tracks[0] as (typeof tracks)[number],
+    error: null,
+    retry: true,
+  });
+  manager.completeSpotifyPreparation({ code, importId });
+
+  const recovered = manager.snapshot(code, "host");
+  assert.equal(recovered.deck?.trackCount, 13);
+  assert.equal(recovered.deck?.preparation?.failedCount, 0);
+  assert.deepEqual(recovered.deck?.preparation?.failures, []);
+});
+
+test("cancelling a hosted preparation removes the deck and releases its media", () => {
+  const { manager } = managerFixture();
+  const released: string[] = [];
+  manager.setOnMediaRelease((code) => {
+    released.push(code);
+  });
+  const created = execute(manager, "host", "socket-host", "create");
+  const code = String(created.code);
+  manager.beginHostedDemoDeck({
+    code,
+    sessionId: "host",
+    name: "Generated demo",
+    total: 64,
+  });
+
+  manager.cancelHostedDeck(code, "host");
+
+  assert.equal(manager.snapshot(code, "host").deck, null);
+  assert.deepEqual(released, [code]);
+});
+
+test("Spotify metadata exclusions stay visible but cannot be retried", () => {
+  const { manager } = managerFixture();
+  const created = execute(manager, "host", "socket-host", "create");
+  const code = String(created.code);
+  const tracks = createDemoDeck().slice(0, 12);
+  const importId = manager.beginSpotifyDeck({
+    code,
+    sessionId: "host",
+    name: "Mixed metadata",
+    total: 13,
+    failures: [
+      {
+        id: "spotify-local",
+        title: "Local song",
+        artist: "House band",
+        reason: "Local Spotify files cannot be matched automatically.",
+      },
+    ],
+  });
+  for (const preparedTrack of tracks) {
+    manager.recordSpotifyPreparation({
+      code,
+      importId,
+      track: preparedTrack,
+      error: null,
+    });
+  }
+  manager.completeSpotifyPreparation({ code, importId });
+
+  assert.deepEqual(
+    manager.snapshot(code, "host").deck?.preparation?.failures,
+    [
+      {
+        id: "spotify-local",
+        title: "Local song",
+        artist: "House band",
+        reason: "Local Spotify files cannot be matched automatically.",
+        attempts: 0,
+        retryable: false,
+      },
+    ],
+  );
+  assert.throws(
+    () => manager.retryHostedFailures({ code, sessionId: "host" }),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "NO_FAILED_TRACKS",
   );
 });
