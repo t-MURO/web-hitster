@@ -53,9 +53,9 @@ synchronizes blind playback across the room.
 The current mystery title, artist, cover, Spotify link, YouTube result, and
 filesystem path are never included in pre-reveal room state.
 
-To bound temporary storage and preparation time, one import uses at most the
-first 200 eligible unique playlist tracks and inspects at most 500 playlist
-items.
+To bound temporary storage and preparation time, one import randomly samples
+at most 200 eligible unique tracks from the entire playlist. Audio preparation
+stops after 100 successful tracks.
 
 ## Spotify setup
 

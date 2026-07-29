@@ -585,7 +585,6 @@ export class RoomManager {
           );
         }
         game.lockPlacement(sessionId);
-        this.#pausePlayback(room);
         break;
       }
       case "challengeGap": {
@@ -607,6 +606,7 @@ export class RoomManager {
             .filter((player) => player.connected)
             .map((player) => player.id),
         );
+        this.#pausePlayback(room);
         if (game.status === "finished") room.status = "finished";
         break;
       }

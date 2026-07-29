@@ -1,9 +1,9 @@
+import { randomInt } from "node:crypto";
 import type { SpotifyPlaylistSummary, Track } from "../shared/types.js";
 import type { SpotifySession } from "./session-store.js";
 
 const SPOTIFY_ACCOUNTS_URL = "https://accounts.spotify.com";
 const SPOTIFY_API_URL = "https://api.spotify.com/v1";
-const MAX_PLAYLIST_ITEMS_INSPECTED = 500;
 const MAX_ELIGIBLE_TRACKS = 200;
 const PLAYLIST_SCOPES = [
   "playlist-read-private",
@@ -252,21 +252,19 @@ export class SpotifyService {
     const tracks: Track[] = [];
     const rejections: SpotifyPlaylistRejection[] = [];
     const seen = new Set<string>();
+    const visitedPages = new Set<string>();
     let itemIndex = 0;
+    let eligibleTrackCount = 0;
     let next: string | null =
       `${SPOTIFY_API_URL}/playlists/${playlistId}/items?limit=50`;
 
-    while (
-      next &&
-      tracks.length < MAX_ELIGIBLE_TRACKS &&
-      itemIndex < MAX_PLAYLIST_ITEMS_INSPECTED
-    ) {
+    while (next && !visitedPages.has(next)) {
+      visitedPages.add(next);
       const page: SpotifyPlaylistItemsResponse =
         await this.#authorizedJson<SpotifyPlaylistItemsResponse>(spotify, next);
       for (const wrapper of page.items ?? []) {
         const item = wrapper.item ?? wrapper.track;
         itemIndex += 1;
-        if (itemIndex > MAX_PLAYLIST_ITEMS_INSPECTED) break;
         const fallbackId = `spotify-rejected-${itemIndex}`;
         const itemId = item?.id ? `spotify-${item.id}` : fallbackId;
         const title = item?.name?.trim() || "Unavailable playlist item";
@@ -317,7 +315,7 @@ export class SpotifyService {
           continue;
         }
 
-        tracks.push({
+        const track: Track = {
           id: `spotify-${item.id}`,
           title,
           artist,
@@ -331,8 +329,16 @@ export class SpotifyService {
           spotifyUrl:
             item.external_urls?.spotify ??
             `https://open.spotify.com/track/${item.id}`,
-        });
-        if (tracks.length >= MAX_ELIGIBLE_TRACKS) break;
+        };
+        eligibleTrackCount += 1;
+        if (tracks.length < MAX_ELIGIBLE_TRACKS) {
+          tracks.push(track);
+        } else {
+          const replacementIndex = randomInt(eligibleTrackCount);
+          if (replacementIndex < MAX_ELIGIBLE_TRACKS) {
+            tracks[replacementIndex] = track;
+          }
+        }
       }
 
       next = this.#safeNext(page.next);

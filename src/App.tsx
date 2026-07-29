@@ -1718,24 +1718,24 @@ function GameScreen({
         tokens={game.tokens}
       />
       {game.current.phase === "listening" && (
-        <>
-          <HostCue
-            activeIsHost={room.hostId === game.activePlayerId}
-            busy={busy}
-            command={command}
-            cue={room.hostCue}
-            playback={room.playback}
-            run={run}
-          />
-          <HostedCue
-            audio={synchronizedAudio}
-            busy={busy}
-            command={command}
-            isHost={room.isHost}
-            playback={room.playback}
-            run={run}
-          />
-        </>
+        <HostCue
+          activeIsHost={room.hostId === game.activePlayerId}
+          busy={busy}
+          command={command}
+          cue={room.hostCue}
+          playback={room.playback}
+          run={run}
+        />
+      )}
+      {game.current.phase !== "revealed" && (
+        <HostedCue
+          audio={synchronizedAudio}
+          busy={busy}
+          command={command}
+          isHost={room.isHost}
+          playback={room.playback}
+          run={run}
+        />
       )}
 
       <section
