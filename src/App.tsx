@@ -25,6 +25,8 @@ import {
   Plus,
   Question,
   SignOut,
+  SpeakerHigh,
+  SpeakerSlash,
   UploadSimple,
   UsersThree,
   Waveform,
@@ -1208,6 +1210,7 @@ function MainTimeline({
     const challenge = game.current.challenges.find(
       (entry) => entry.gapIndex === index,
     );
+    const ownChallenge = challenge?.playerId === viewerId;
     const challenger = challenge
       ? players.find((player) => player.id === challenge.playerId)
       : null;
@@ -1228,20 +1231,25 @@ function MainTimeline({
       nodes.push(
         <button
           aria-label={
-            challenger
+            ownChallenge
+              ? `Remove your challenge from ${gapLabel(timeline, index)}`
+              : challenger
               ? `${challenger.displayName} challenged ${gapLabel(timeline, index)}`
               : gapLabel(timeline, index)
           }
-          className={`gap-slot ${challenge ? "gap-slot--challenged" : ""}`}
+          className={`gap-slot ${challenge ? "gap-slot--challenged" : ""} ${
+            ownChallenge ? "gap-slot--own-challenge" : ""
+          }`}
           disabled={!canSelect}
           key={`gap-${index}`}
           onClick={() => onSelect(index)}
+          title={ownChallenge ? "Click again to remove your challenge" : undefined}
           type="button"
         >
           {challenger ? (
             <span className="challenge-marker">
               <strong>{challenger.displayName}</strong>
-              <small>Challenge</small>
+              <small>{ownChallenge ? "Remove" : "Challenge"}</small>
             </span>
           ) : (
             <Plus weight="light" aria-hidden="true" />
@@ -1452,6 +1460,38 @@ function HostedCue({
             Ready for host
           </span>
         )}
+        <div className="personal-audio-controls">
+          <button
+            aria-label={audio.muted ? "Unmute your audio" : "Mute your audio"}
+            aria-pressed={audio.muted}
+            className="personal-audio-controls__mute"
+            onClick={() => audio.setMuted(!audio.muted)}
+            title={audio.muted ? "Unmute" : "Mute"}
+            type="button"
+          >
+            {audio.muted || audio.volume === 0 ? (
+              <SpeakerSlash weight="fill" aria-hidden="true" />
+            ) : (
+              <SpeakerHigh weight="fill" aria-hidden="true" />
+            )}
+          </button>
+          <label>
+            <span className="sr-only">Your volume</span>
+            <input
+              aria-label="Your volume"
+              max="100"
+              min="0"
+              onChange={(event) =>
+                audio.setVolume(Number(event.target.value) / 100)
+              }
+              type="range"
+              value={Math.round(audio.volume * 100)}
+            />
+          </label>
+          <output aria-label="Current volume">
+            {Math.round(audio.volume * 100)}%
+          </output>
+        </div>
       </div>
     </aside>
   );
@@ -1919,7 +1959,7 @@ function GameScreen({
                 ? `Your challenge token is on ${gapLabel(
                     timeline,
                     viewerChallenge.gapIndex,
-                  )}.`
+                  )}. Select it again to remove it, or choose another gap to move it.`
                 : viewerPassed
                   ? "You passed. Waiting for the other players."
                 : viewerTokens > 0

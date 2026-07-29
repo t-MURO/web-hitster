@@ -1445,7 +1445,60 @@ a {
 
 .host-cue__controls {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.personal-audio-controls {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 7px;
+  border: 1px solid #3d5362;
+  border-radius: 6px;
+  background: #0d1419;
+}
+
+.personal-audio-controls__mute {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--blue);
+  cursor: pointer;
+}
+
+.personal-audio-controls__mute:hover {
+  background: #20303a;
+}
+
+.personal-audio-controls__mute svg {
+  width: 19px;
+  height: 19px;
+}
+
+.personal-audio-controls label {
+  display: flex;
+}
+
+.personal-audio-controls input[type="range"] {
+  width: 88px;
+  accent-color: var(--blue);
+  cursor: pointer;
+}
+
+.personal-audio-controls output {
+  min-width: 31px;
+  color: #aebdc6;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .cue-button {
@@ -1748,6 +1801,11 @@ a {
 .gap-slot:not(:disabled):hover {
   border-color: var(--amber);
   color: var(--amber);
+}
+
+.gap-slot--own-challenge:not(:disabled):hover {
+  border-color: #d56868;
+  color: #f19a9a;
 }
 
 .gap-slot > svg {

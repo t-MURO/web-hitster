@@ -4,6 +4,8 @@ import type { RoomCommand, RoomSnapshot } from "../shared/types.js";
 interface SynchronizedAudioState {
   hosted: boolean;
   enabled: boolean;
+  muted: boolean;
+  volume: number;
   loading: boolean;
   ready: boolean;
   allReady: boolean;
@@ -11,6 +13,43 @@ interface SynchronizedAudioState {
   requiredCount: number;
   error: string;
   enable: () => Promise<void>;
+  setMuted: (muted: boolean) => void;
+  setVolume: (volume: number) => void;
+}
+
+const AUDIO_PREFERENCES_STORAGE_KEY = "webstar.audio-preferences.v1";
+
+interface AudioPreferences {
+  muted: boolean;
+  volume: number;
+}
+
+function readAudioPreferences(): AudioPreferences {
+  try {
+    const stored = window.localStorage.getItem(AUDIO_PREFERENCES_STORAGE_KEY);
+    if (!stored) return { muted: false, volume: 1 };
+    const value = JSON.parse(stored) as Partial<AudioPreferences>;
+    return {
+      muted: value.muted === true,
+      volume:
+        typeof value.volume === "number" && Number.isFinite(value.volume)
+          ? Math.min(1, Math.max(0, value.volume))
+          : 1,
+    };
+  } catch {
+    return { muted: false, volume: 1 };
+  }
+}
+
+function rememberAudioPreferences(preferences: AudioPreferences): void {
+  try {
+    window.localStorage.setItem(
+      AUDIO_PREFERENCES_STORAGE_KEY,
+      JSON.stringify(preferences),
+    );
+  } catch {
+    // Personal audio controls still work when browser storage is unavailable.
+  }
 }
 
 let sharedAudioContext: AudioContext | null = null;
@@ -56,8 +95,14 @@ export function useSynchronizedAudio(
   const contextRef = useRef<AudioContext | null>(null);
   const bufferRef = useRef<AudioBuffer | null>(null);
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const gainRef = useRef<GainNode | null>(null);
   const loadedRoundRef = useRef(0);
   const [enabled, setEnabled] = useState(true);
+  const [preferences, setPreferences] = useState<AudioPreferences>(
+    readAudioPreferences,
+  );
+  const preferencesRef = useRef(preferences);
+  preferencesRef.current = preferences;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [bufferVersion, setBufferVersion] = useState(0);
@@ -66,6 +111,14 @@ export function useSynchronizedAudio(
   const enable = useCallback(async () => {
     const context = roomAudioContext();
     contextRef.current = context;
+    if (!gainRef.current) {
+      const gain = context.createGain();
+      gain.gain.value = preferencesRef.current.muted
+        ? 0
+        : preferencesRef.current.volume;
+      gain.connect(context.destination);
+      gainRef.current = gain;
+    }
     await context.resume();
     if (context.state !== "running") {
       throw new Error("Your browser is blocking automatic audio.");
@@ -75,18 +128,51 @@ export function useSynchronizedAudio(
     setLoadAttempt((value) => value + 1);
   }, []);
 
+  const setMuted = useCallback((muted: boolean) => {
+    setPreferences((current) => ({ ...current, muted }));
+  }, []);
+
+  const setVolume = useCallback((volume: number) => {
+    const safeVolume = Number.isFinite(volume)
+      ? Math.min(1, Math.max(0, volume))
+      : 1;
+    setPreferences((current) => ({ ...current, volume: safeVolume }));
+  }, []);
+
   useEffect(() => {
     if (!hosted) return;
     const context = roomAudioContext();
     contextRef.current = context;
+    if (!gainRef.current) {
+      const gain = context.createGain();
+      gain.gain.value = preferencesRef.current.muted
+        ? 0
+        : preferencesRef.current.volume;
+      gain.connect(context.destination);
+      gainRef.current = gain;
+    }
     setEnabled(true);
     void context.resume().catch(() => {});
   }, [hosted]);
 
   useEffect(() => {
+    const gain = gainRef.current;
+    const context = contextRef.current;
+    if (gain && context) {
+      gain.gain.setValueAtTime(
+        preferences.muted ? 0 : preferences.volume,
+        context.currentTime,
+      );
+    }
+    rememberAudioPreferences(preferences);
+  }, [preferences]);
+
+  useEffect(() => {
     return () => {
       stopSource(sourceRef.current);
       sourceRef.current = null;
+      gainRef.current?.disconnect();
+      gainRef.current = null;
       contextRef.current = null;
     };
   }, []);
@@ -172,7 +258,16 @@ export function useSynchronizedAudio(
 
         const source = context.createBufferSource();
         source.buffer = buffer;
-        source.connect(context.destination);
+        let gain = gainRef.current;
+        if (!gain) {
+          gain = context.createGain();
+          gain.gain.value = preferencesRef.current.muted
+            ? 0
+            : preferencesRef.current.volume;
+          gain.connect(context.destination);
+          gainRef.current = gain;
+        }
+        source.connect(gain);
         source.start(context.currentTime + delaySeconds, offsetSeconds);
         sourceRef.current = source;
         setEnabled(true);
@@ -215,6 +310,8 @@ export function useSynchronizedAudio(
   return {
     hosted,
     enabled,
+    muted: preferences.muted,
+    volume: preferences.volume,
     loading,
     ready: readyPlayerIds.includes(room.viewerId),
     allReady:
@@ -224,5 +321,7 @@ export function useSynchronizedAudio(
     requiredCount: connectedPlayerIds.length,
     error,
     enable,
+    setMuted,
+    setVolume,
   };
 }

@@ -400,6 +400,19 @@ export class TimelineGame {
     if (gapIndex === this.#current.selectedGap) {
       throw new GameRuleError("Choose a different position to challenge.");
     }
+    const existing = this.#current.challenges.find(
+      (challenge) => challenge.playerId === playerId,
+    );
+    if (existing?.gapIndex === gapIndex) {
+      this.#current.challenges = this.#current.challenges.filter(
+        (challenge) => challenge.playerId !== playerId,
+      );
+      this.#tokens.set(
+        playerId,
+        Math.min(5, (this.#tokens.get(playerId) ?? 0) + 1),
+      );
+      return;
+    }
     const occupied = this.#current.challenges.find(
       (challenge) =>
         challenge.gapIndex === gapIndex && challenge.playerId !== playerId,
@@ -408,9 +421,6 @@ export class TimelineGame {
       throw new GameRuleError("Another player already challenged that position.");
     }
 
-    const existing = this.#current.challenges.find(
-      (challenge) => challenge.playerId === playerId,
-    );
     if (existing) {
       existing.gapIndex = gapIndex;
       return;
