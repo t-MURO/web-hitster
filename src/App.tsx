@@ -586,10 +586,10 @@ function PlayerAvatar({
 
 function PlayerStrip({
   players,
-  challengeTokens,
+  tokens,
 }: {
   players: RoomPlayerSnapshot[];
-  challengeTokens?: Record<string, number>;
+  tokens?: Record<string, number>;
 }) {
   return (
     <section
@@ -613,10 +613,10 @@ function PlayerStrip({
               <Headphones weight="fill" aria-hidden="true" />
               {player.connected ? "Connected" : "Reconnecting"}
             </span>
-            {challengeTokens && (
+            {tokens && (
               <span className="token-label">
                 <i aria-hidden="true" />
-                {challengeTokens[player.id] ?? 0} HITSTER
+                {tokens[player.id] ?? 0} music tokens
               </span>
             )}
           </div>
@@ -1136,6 +1136,7 @@ function MysteryCard({ current }: { current: CurrentRoundSnapshot }) {
   const revealed = current.phase === "revealed";
   const correct = current.outcome?.correct;
   const stolen = Boolean(current.outcome?.winningChallengePlayerId);
+  const tokenTrade = current.outcome?.resolution === "token-trade";
   return (
     <article
       className={`mystery-card ${revealed ? "mystery-card--revealed" : ""} ${
@@ -1153,7 +1154,15 @@ function MysteryCard({ current }: { current: CurrentRoundSnapshot }) {
             <X weight="bold" aria-hidden="true" />
           )}
           <strong>{current.track?.year ?? "—"}</strong>
-          <span>{correct ? "Correct" : stolen ? "Stolen" : "Wrong gap"}</span>
+          <span>
+            {tokenTrade
+              ? "Token card"
+              : correct
+                ? "Correct"
+                : stolen
+                  ? "Stolen"
+                  : "Wrong gap"}
+          </span>
         </>
       ) : (
         <>
@@ -1190,7 +1199,12 @@ function MainTimeline({
 }) {
   const nodes: ReactNode[] = [];
   for (let index = 0; index <= timeline.length; index += 1) {
-    const selected = game.current.selectedGap === index;
+    const selected =
+      game.current.outcome?.resolution !== "token-trade" &&
+      game.current.selectedGap === index;
+    const placedOnActiveTimeline =
+      game.current.phase === "revealed" &&
+      game.current.outcome?.awardedPlayerId === game.activePlayerId;
     const challenge = game.current.challenges.find(
       (entry) => entry.gapIndex === index,
     );
@@ -1202,7 +1216,7 @@ function MainTimeline({
       (selectionMode === "placement" ||
         (selectionMode === "challenge" &&
           (!challenge || challenge.playerId === viewerId)));
-    if (selected) {
+    if (selected && !placedOnActiveTimeline) {
       nodes.push(
         <div className="gap-slot gap-slot--selected" key={`gap-${index}`}>
           <span className="selection-caret" aria-hidden="true" />
@@ -1210,7 +1224,7 @@ function MainTimeline({
           <span className="gap-slot__label">{gapLabel(timeline, index)}</span>
         </div>,
       );
-    } else {
+    } else if (!selected) {
       nodes.push(
         <button
           aria-label={
@@ -1227,7 +1241,7 @@ function MainTimeline({
           {challenger ? (
             <span className="challenge-marker">
               <strong>{challenger.displayName}</strong>
-              <small>HITSTER</small>
+              <small>Challenge</small>
             </span>
           ) : (
             <Plus weight="light" aria-hidden="true" />
@@ -1296,7 +1310,7 @@ function HostCue({
   run,
   activeIsHost,
 }: {
-  cue: Track | null;
+  cue: Pick<Track, "audioCue"> | null;
   playback: PlaybackSnapshot;
   command: RoomCommand;
   busy: string;
@@ -1308,8 +1322,8 @@ function HostCue({
     <aside className="host-cue">
       <div>
         <span className="eyebrow">Host-only audio cue</span>
-        <strong>{cue.title}</strong>
-        <small>{cue.artist} · answer {cue.year}</small>
+        <strong>Mystery track</strong>
+        <small>The answer stays hidden until reveal.</small>
       </div>
       <div className="host-cue__source">
         {isWebUrl(cue.audioCue) ? (
@@ -1320,7 +1334,9 @@ function HostCue({
         ) : (
           <span>{cue.audioCue}</span>
         )}
-        {activeIsHost && <em>You are active—avoid reading the answer if playing blind.</em>}
+        {activeIsHost && (
+          <em>You are active—open the external source without reading its title.</em>
+        )}
       </div>
       <div className="host-cue__controls">
         <button
@@ -1502,6 +1518,8 @@ function GameScreen({
   const [hostMenuOpen, setHostMenuOpen] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [guessTitle, setGuessTitle] = useState("");
+  const [guessArtist, setGuessArtist] = useState("");
   const synchronizedAudio = useSynchronizedAudio(room, command);
   const game = room.game;
   const activePlayer = room.players.find((player) => player.id === game.activePlayerId);
@@ -1518,7 +1536,28 @@ function GameScreen({
   const viewerChallenge = game.current.challenges.find(
     (challenge) => challenge.playerId === room.viewerId,
   );
-  const viewerTokens = game.challengeTokens[room.viewerId] ?? 0;
+  const viewerTokens = game.tokens[room.viewerId] ?? 0;
+  const viewerPassed = game.current.challengePasses.includes(room.viewerId);
+  const viewerResponded = Boolean(viewerChallenge) || viewerPassed;
+  const connectedOpponentIds = room.players
+    .filter(
+      (player) =>
+        player.connected && player.id !== game.activePlayerId,
+    )
+    .map((player) => player.id);
+  const everyOpponentResponded = connectedOpponentIds.every(
+    (playerId) =>
+      game.current.challengePasses.includes(playerId) ||
+      game.current.challenges.some(
+        (challenge) => challenge.playerId === playerId,
+      ),
+  );
+  const tokenTrade = game.current.outcome?.resolution === "token-trade";
+
+  useEffect(() => {
+    setGuessTitle("");
+    setGuessArtist("");
+  }, [game.roundNumber]);
 
   async function run(label: string, callback: AsyncCallback) {
     setBusy(label);
@@ -1532,8 +1571,20 @@ function GameScreen({
     }
   }
 
+  async function submitGuess(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await run("guess", () =>
+      command("submitGuess", {
+        title: guessTitle,
+        artist: guessArtist,
+      }),
+    );
+  }
+
   const stateLabel = revealed
-    ? correct
+    ? tokenTrade
+      ? `Token card · ${game.current.track?.year ?? "—"}`
+      : correct
       ? `Correct · ${game.current.track?.year ?? "—"}`
       : awardedPlayer
         ? `${game.current.track?.year ?? "—"} · ${awardedPlayer.displayName} stole it`
@@ -1555,6 +1606,7 @@ function GameScreen({
   const canChallenge =
     challenging &&
     !isActive &&
+    !viewerPassed &&
     (viewerTokens > 0 || Boolean(viewerChallenge));
   const selectionMode: "placement" | "challenge" | "none" =
     isActive && game.current.phase === "listening"
@@ -1566,8 +1618,22 @@ function GameScreen({
     isActive &&
     game.current.phase === "listening" &&
     room.playback.status === "playing";
-  const canReveal = challenging && (isActive || room.isHost);
+  const canPass = challenging && !isActive && !viewerResponded;
+  const canReveal =
+    challenging &&
+    everyOpponentResponded &&
+    (isActive || room.isHost);
   const canContinue = revealed && (isActive || room.isHost);
+  const canSkip =
+    isActive &&
+    game.current.phase === "listening" &&
+    viewerTokens >= 1 &&
+    game.remainingTrackCount > 0;
+  const canTrade =
+    game.current.phase === "listening" &&
+    room.playback.status === "ready" &&
+    viewerTokens >= 3;
+  const showNonActiveTrade = canTrade && !isActive;
 
   if (!activePlayer) {
     return (
@@ -1608,8 +1674,8 @@ function GameScreen({
         </div>
       </BrandHeader>
       <PlayerStrip
-        challengeTokens={game.challengeTokens}
         players={room.players}
+        tokens={game.tokens}
       />
       {game.current.phase === "listening" && (
         <>
@@ -1643,7 +1709,9 @@ function GameScreen({
           <span aria-hidden="true" />
           <h1>
             {revealed
-              ? correct
+              ? tokenTrade
+                ? `${awardedPlayer?.displayName ?? "A player"} took the card`
+                : correct
                 ? "Great placement"
                 : awardedPlayer
                   ? `${awardedPlayer.displayName} stole the card`
@@ -1667,6 +1735,104 @@ function GameScreen({
           )}
           <strong>{stateLabel}</strong>
           <WaveRail />
+        </div>
+
+        <div
+          className={`round-rule-tools ${
+            revealed ? "round-rule-tools--answer" : ""
+          } ${
+            showNonActiveTrade ? "round-rule-tools--tokens-only" : ""
+          }`}
+        >
+          {revealed && game.current.track ? (
+            <article className="reveal-answer">
+              <img
+                src={fallbackCover(game.current.track, game.roundNumber)}
+                alt=""
+              />
+              <div>
+                <span className="eyebrow">The answer</span>
+                <strong>{game.current.track.title}</strong>
+                <small>
+                  {game.current.track.artist} · {game.current.track.year}
+                </small>
+              </div>
+            </article>
+          ) : game.current.phase === "listening" && (isActive || canTrade) ? (
+            <>
+              {isActive && (
+                <form
+                  className="song-guess"
+                  onSubmit={(event) => void submitGuess(event)}
+                >
+                  <div>
+                    <label className="field-label" htmlFor="guess-title">
+                      Know the song? Earn a token
+                    </label>
+                    <span>
+                      Correctly name both before locking in. Maximum five tokens.
+                    </span>
+                  </div>
+                  <input
+                    autoComplete="off"
+                    id="guess-title"
+                    maxLength={120}
+                    onChange={(event) => setGuessTitle(event.target.value)}
+                    placeholder="Song title"
+                    value={guessTitle}
+                  />
+                  <input
+                    autoComplete="off"
+                    id="guess-artist"
+                    maxLength={120}
+                    onChange={(event) => setGuessArtist(event.target.value)}
+                    placeholder="Artist"
+                    value={guessArtist}
+                  />
+                  <button
+                    className="secondary-button"
+                    disabled={
+                      Boolean(busy) ||
+                      !guessTitle.trim() ||
+                      !guessArtist.trim()
+                    }
+                    type="submit"
+                  >
+                    {busy === "guess"
+                      ? "Saving…"
+                      : game.current.guessSubmitted
+                        ? "Update guess"
+                        : "Submit guess"}
+                  </button>
+                </form>
+              )}
+              <div className="token-actions">
+                {isActive && (
+                  <button
+                    className="secondary-button"
+                    disabled={Boolean(busy) || !canSkip}
+                    onClick={() =>
+                      void run("skip", () => command("skipTrack"))
+                    }
+                    type="button"
+                  >
+                    Skip song · 1 token
+                  </button>
+                )}
+                <button
+                  className="secondary-button"
+                  disabled={Boolean(busy) || !canTrade}
+                  onClick={() =>
+                    void run("trade", () => command("tradeTokensForCard"))
+                  }
+                  title="Available before the song starts; you will skip your next turn."
+                  type="button"
+                >
+                  Take card · 3 tokens
+                </button>
+              </div>
+            </>
+          ) : null}
         </div>
 
         <div className="timeline-scroller">
@@ -1699,14 +1865,16 @@ function GameScreen({
               (revealed
                 ? !canContinue
                 : challenging
-                  ? !canReveal
+                  ? !canPass && !canReveal
                   : !canLock)
             }
             onClick={() => {
               const commandName = revealed
                 ? "nextRound"
                 : challenging
-                  ? "reveal"
+                  ? canPass
+                    ? "passChallenge"
+                    : "reveal"
                   : "lockIn";
               void run(commandName, () => command(commandName));
             }}
@@ -1718,13 +1886,17 @@ function GameScreen({
                   ? "Next turn"
                   : "Waiting"
                 : challenging
-                  ? canReveal
+                  ? canPass
+                    ? "No challenge"
+                    : canReveal
                     ? "Reveal answer"
                     : viewerChallenge
                       ? "Challenge placed"
-                      : canChallenge
-                        ? "Choose another gap"
-                        : "Waiting for reveal"
+                      : viewerPassed
+                        ? "Waiting for others"
+                        : isActive
+                          ? "Waiting for responses"
+                          : "Waiting for reveal"
                 : isActive
                   ? "Lock in"
                   : `Waiting for ${activePlayer.displayName}`}
@@ -1744,18 +1916,40 @@ function GameScreen({
           {challenging && !isActive && (
             <span className="selection-status">
               {viewerChallenge
-                ? `Your HITSTER token is on ${gapLabel(
+                ? `Your challenge token is on ${gapLabel(
                     timeline,
                     viewerChallenge.gapIndex,
                   )}.`
+                : viewerPassed
+                  ? "You passed. Waiting for the other players."
                 : viewerTokens > 0
-                  ? "Think it is wrong? Choose a different gap."
-                  : "You have no HITSTER tokens left."}
+                  ? "Think it is wrong? Choose a different gap, or pass."
+                  : "You have no music tokens. Pass to continue."}
             </span>
           )}
           {challenging && isActive && (
             <span className="selection-status">
               Give opponents a chance to challenge before revealing.
+            </span>
+          )}
+          {revealed && game.current.outcome?.guessCorrect !== null && (
+            <span
+              className={`selection-status guess-result ${
+                game.current.outcome?.guessCorrect ? "is-correct" : ""
+              }`}
+            >
+              {game.current.outcome?.guessCorrect
+                ? game.current.outcome.tokenAwarded
+                  ? "Title and artist correct · You earned 1 music token."
+                  : "Title and artist correct · Your token stack is already full."
+                : "The title or artist guess was not correct."}
+            </span>
+          )}
+          {revealed && tokenTrade && (
+            <span className="selection-status">
+              The card was added automatically to{" "}
+              {awardedPlayer?.displayName ?? "the buyer"}’s timeline. They will
+              skip their next turn.
             </span>
           )}
         </div>
@@ -1807,11 +2001,17 @@ function ResultsScreen({
         <Crown weight="fill" aria-hidden="true" />
         <span className="eyebrow">Game complete</span>
         <h1>
-          {winners.length === 1
+          {winners.length === 0
+            ? "Game ended"
+            : winners.length === 1
             ? `${winners[0]?.displayName ?? "Winner"} wins`
             : `${winners.map((winner) => winner.displayName).join(" & ")} tie`}
         </h1>
-        <p>First to ten—or the highest timeline when the deck ran out.</p>
+        <p>
+          {winners.length
+            ? "The first player to complete a ten-card timeline wins."
+            : "No player completed a ten-card timeline."}
+        </p>
         <div className="scoreboard">
           {ranked.map((player, index) => (
             <div className="score-row" key={player.id}>

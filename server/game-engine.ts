@@ -14,6 +14,8 @@ interface CurrentRound {
   phase: GamePhase;
   selectedGap: number;
   challenges: RoundChallengeSnapshot[];
+  challengePasses: Set<string>;
+  guess: { title: string; artist: string } | null;
   outcome: RoundOutcome | null;
 }
 
@@ -77,13 +79,46 @@ function insertionGap(timeline: readonly Track[], year: number): number {
   return firstLaterTrack < 0 ? timeline.length : firstLaterTrack;
 }
 
+function normalizedAnswer(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/\b(feat|ft)\.?\b/g, " featuring ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function baseTitle(value: string): string {
+  return normalizedAnswer(value.replace(/\s*[\[(].*?[\])]\s*$/g, ""));
+}
+
+function titleMatches(guess: string, answer: string): boolean {
+  const normalizedGuess = normalizedAnswer(guess);
+  return (
+    normalizedGuess === normalizedAnswer(answer) ||
+    normalizedGuess === baseTitle(answer)
+  );
+}
+
+function artistMatches(guess: string, answer: string): boolean {
+  const normalizedGuess = normalizedAnswer(guess);
+  if (normalizedGuess === normalizedAnswer(answer)) return true;
+  return answer
+    .split(/\s*(?:,|&|\bfeat\.?\b|\bft\.?\b|\bfeaturing\b)\s*/i)
+    .some((artist) => normalizedAnswer(artist) === normalizedGuess);
+}
+
 export class TimelineGame {
   #players: GamePlayer[] = [];
   #turnOrder: string[] = [];
   #timelines = new Map<string, Track[]>();
   #deck: Track[] = [];
   #knownTrackIds = new Set<string>();
-  #challengeTokens = new Map<string, number>();
+  #tokens = new Map<string, number>();
+  #skipNextTurn = new Set<string>();
   #turnIndex = 0;
   #roundNumber = 0;
   #current: CurrentRound | null = null;
@@ -118,17 +153,12 @@ export class TimelineGame {
 
     const game = new TimelineGame();
     game.#players = structuredClone(players);
-    game.#turnOrder = shuffled(
-      players.map((player) => player.id),
-      random,
-    );
+    game.#turnOrder = players.map((player) => player.id);
     game.#winningTimelineSize = winningTimelineSize;
     game.#maximumTrackCount = maximumTrackCount;
     game.#acceptingTracks = acceptingTracks;
     game.#random = random;
-    game.#challengeTokens = new Map(
-      players.map((player) => [player.id, 2]),
-    );
+    game.#tokens = new Map(players.map((player) => [player.id, 2]));
 
     const shuffledTracks = shuffled(tracks, random);
     game.#knownTrackIds = new Set(shuffledTracks.map((track) => track.id));
@@ -138,6 +168,21 @@ export class TimelineGame {
         throw new GameRuleError("The deck does not have enough starting cards.");
       }
       game.#timelines.set(playerId, [startingCard]);
+    }
+    const oldestStartingYear = Math.min(
+      ...game.#turnOrder.map(
+        (playerId) => game.#timelines.get(playerId)?.[0]?.year ?? Infinity,
+      ),
+    );
+    const startingPlayerIndex = game.#turnOrder.findIndex(
+      (playerId) =>
+        game.#timelines.get(playerId)?.[0]?.year === oldestStartingYear,
+    );
+    if (startingPlayerIndex > 0) {
+      game.#turnOrder = [
+        ...game.#turnOrder.slice(startingPlayerIndex),
+        ...game.#turnOrder.slice(0, startingPlayerIndex),
+      ];
     }
     game.#deck = shuffledTracks;
     game.#startRound();
@@ -175,7 +220,7 @@ export class TimelineGame {
     const track = this.#deck.shift();
     if (!track) {
       this.#current = null;
-      if (!this.#acceptingTracks) this.#finishByScore();
+      if (!this.#acceptingTracks) this.#finishWithoutWinner();
       return;
     }
 
@@ -186,6 +231,8 @@ export class TimelineGame {
       phase: "listening",
       selectedGap: defaultGap(timeline),
       challenges: [],
+      challengePasses: new Set(),
+      guess: null,
       outcome: null,
     };
   }
@@ -213,20 +260,93 @@ export class TimelineGame {
   closeTrackFeed(): void {
     this.#acceptingTracks = false;
     if (this.#status === "playing" && !this.#current && this.#deck.length === 0) {
-      this.#finishByScore();
+      this.#finishWithoutWinner();
     }
   }
 
-  #finishByScore(): void {
+  #finishWithoutWinner(): void {
     this.#status = "finished";
-    const scores = this.#turnOrder.map((playerId) => ({
-      playerId,
-      score: this.#timelines.get(playerId)?.length ?? 0,
-    }));
-    const highScore = Math.max(0, ...scores.map((entry) => entry.score));
-    this.#winners = scores
-      .filter((entry) => entry.score === highScore)
-      .map((entry) => entry.playerId);
+    this.#winners = [];
+  }
+
+  #listeningRound(): CurrentRound {
+    if (this.#status !== "playing" || this.#current?.phase !== "listening") {
+      throw new GameRuleError("That action is only available while listening.");
+    }
+    return this.#current;
+  }
+
+  #activeListeningRound(playerId: string): CurrentRound {
+    const round = this.#listeningRound();
+    if (playerId !== this.activePlayerId) {
+      throw new GameRuleError("Only the active player can do that.");
+    }
+    return round;
+  }
+
+  #spendTokens(playerId: string, amount: number): void {
+    const tokens = this.#tokens.get(playerId) ?? 0;
+    if (tokens < amount) {
+      throw new GameRuleError(
+        amount === 1
+          ? "You have no music tokens left."
+          : `You need ${amount} music tokens for that.`,
+      );
+    }
+    this.#tokens.set(playerId, tokens - amount);
+  }
+
+  #finishIfWinner(playerId: string): void {
+    if (this.#timeline(playerId).length < this.#winningTimelineSize) return;
+    this.#status = "finished";
+    this.#winners = [playerId];
+  }
+
+  submitGuess(playerId: string, title: string, artist: string): void {
+    const round = this.#activeListeningRound(playerId);
+    const cleanTitle = title.trim().slice(0, 120);
+    const cleanArtist = artist.trim().slice(0, 120);
+    if (!normalizedAnswer(cleanTitle) || !normalizedAnswer(cleanArtist)) {
+      throw new GameRuleError("Enter both the song title and artist.");
+    }
+    round.guess = { title: cleanTitle, artist: cleanArtist };
+  }
+
+  skipTrack(playerId: string): void {
+    this.#activeListeningRound(playerId);
+    if (this.#deck.length === 0) {
+      throw new GameRuleError("The next song is not ready yet.");
+    }
+    this.#spendTokens(playerId, 1);
+    this.#startRound();
+  }
+
+  tradeTokensForCard(playerId: string): RoundOutcome {
+    const round = this.#listeningRound();
+    if (!this.#turnOrder.includes(playerId)) {
+      throw new GameRuleError("That player is not in this game.");
+    }
+    this.#spendTokens(playerId, 3);
+
+    const timeline = this.#timeline(playerId);
+    const gapIndex = insertionGap(timeline, round.track.year);
+    const { previousYear, nextYear } = gapBounds(timeline, gapIndex);
+    timeline.splice(gapIndex, 0, round.track);
+    this.#skipNextTurn.add(playerId);
+    round.selectedGap = gapIndex;
+    round.phase = "revealed";
+    round.outcome = {
+      resolution: "token-trade",
+      correct: true,
+      previousYear: Number.isFinite(previousYear) ? previousYear : null,
+      nextYear: Number.isFinite(nextYear) ? nextYear : null,
+      awardedPlayerId: playerId,
+      winningChallengePlayerId: null,
+      guessCorrect: null,
+      tokenAwarded: false,
+    };
+    this.#finishIfWinner(playerId);
+    return structuredClone(round.outcome);
   }
 
   selectGap(playerId: string, gapIndex: number): void {
@@ -296,15 +416,38 @@ export class TimelineGame {
       return;
     }
 
-    const tokens = this.#challengeTokens.get(playerId) ?? 0;
-    if (tokens < 1) {
-      throw new GameRuleError("You have no HITSTER tokens left.");
+    if (this.#current.challengePasses.has(playerId)) {
+      throw new GameRuleError("You already passed on this challenge.");
     }
-    this.#challengeTokens.set(playerId, tokens - 1);
+    this.#spendTokens(playerId, 1);
     this.#current.challenges.push({ playerId, gapIndex });
   }
 
-  reveal(playerId: string, hostId = playerId): RoundOutcome {
+  passChallenge(playerId: string): void {
+    if (this.#status !== "playing" || this.#current?.phase !== "challenging") {
+      throw new GameRuleError("Challenges are not open right now.");
+    }
+    if (playerId === this.activePlayerId) {
+      throw new GameRuleError("The active player cannot pass for opponents.");
+    }
+    if (!this.#turnOrder.includes(playerId)) {
+      throw new GameRuleError("That player is not in this game.");
+    }
+    if (
+      this.#current.challenges.some(
+        (challenge) => challenge.playerId === playerId,
+      )
+    ) {
+      throw new GameRuleError("Your challenge is already placed.");
+    }
+    this.#current.challengePasses.add(playerId);
+  }
+
+  reveal(
+    playerId: string,
+    hostId = playerId,
+    challengePlayerIds: readonly string[] = [],
+  ): RoundOutcome {
     if (this.#status !== "playing" || !this.#current) {
       throw new GameRuleError("This round cannot be revealed now.");
     }
@@ -317,13 +460,41 @@ export class TimelineGame {
     if (playerId !== this.activePlayerId && playerId !== hostId) {
       throw new GameRuleError("Only the active player or host can reveal.");
     }
+    const pendingChallengePlayer = challengePlayerIds.find(
+      (candidateId) =>
+        candidateId !== this.activePlayerId &&
+        !this.#current?.challengePasses.has(candidateId) &&
+        !this.#current?.challenges.some(
+          (challenge) => challenge.playerId === candidateId,
+        ),
+    );
+    if (pendingChallengePlayer) {
+      throw new GameRuleError(
+        "Wait for every connected opponent to challenge or pass.",
+      );
+    }
 
     const activePlayerId = this.activePlayerId;
+    if (!activePlayerId) {
+      throw new GameRuleError("There is no active player.");
+    }
     const timeline = this.#timeline(activePlayerId);
     const gapIndex = this.#current.selectedGap;
     const { previousYear, nextYear } = gapBounds(timeline, gapIndex);
     const year = this.#current.track.year;
     const correct = isCorrectGap(timeline, gapIndex, year);
+    const guessCorrect = this.#current.guess
+      ? titleMatches(this.#current.guess.title, this.#current.track.title) &&
+        artistMatches(this.#current.guess.artist, this.#current.track.artist)
+      : null;
+    let tokenAwarded = false;
+    if (guessCorrect) {
+      const tokens = this.#tokens.get(activePlayerId) ?? 0;
+      if (tokens < 5) {
+        this.#tokens.set(activePlayerId, tokens + 1);
+        tokenAwarded = true;
+      }
+    }
     let awardedPlayerId: string | null = null;
     let winningChallengePlayerId: string | null = null;
 
@@ -348,24 +519,17 @@ export class TimelineGame {
 
     this.#current.phase = "revealed";
     this.#current.outcome = {
+      resolution: "placement",
       correct,
       previousYear: Number.isFinite(previousYear) ? previousYear : null,
       nextYear: Number.isFinite(nextYear) ? nextYear : null,
       awardedPlayerId,
       winningChallengePlayerId,
+      guessCorrect,
+      tokenAwarded,
     };
 
-    const awardedTimeline = awardedPlayerId
-      ? this.#timeline(awardedPlayerId)
-      : null;
-    if (
-      awardedPlayerId &&
-      awardedTimeline &&
-      awardedTimeline.length >= this.#winningTimelineSize
-    ) {
-      this.#status = "finished";
-      this.#winners = [awardedPlayerId];
-    }
+    if (awardedPlayerId) this.#finishIfWinner(awardedPlayerId);
 
     return structuredClone(this.#current.outcome);
   }
@@ -379,6 +543,16 @@ export class TimelineGame {
     }
 
     this.#turnIndex = (this.#turnIndex + 1) % this.#turnOrder.length;
+    let skippedPlayers = 0;
+    while (
+      this.activePlayerId &&
+      this.#skipNextTurn.has(this.activePlayerId) &&
+      skippedPlayers < this.#turnOrder.length
+    ) {
+      this.#skipNextTurn.delete(this.activePlayerId);
+      this.#turnIndex = (this.#turnIndex + 1) % this.#turnOrder.length;
+      skippedPlayers += 1;
+    }
     this.#startRound();
   }
 
@@ -389,12 +563,14 @@ export class TimelineGame {
     const removedActivePlayer = removedIndex === this.#turnIndex;
     this.#turnOrder.splice(removedIndex, 1);
     this.#timelines.delete(playerId);
-    this.#challengeTokens.delete(playerId);
+    this.#tokens.delete(playerId);
+    this.#skipNextTurn.delete(playerId);
     this.#players = this.#players.filter((player) => player.id !== playerId);
     if (this.#current) {
       this.#current.challenges = this.#current.challenges.filter(
         (challenge) => challenge.playerId !== playerId,
       );
+      this.#current.challengePasses.delete(playerId);
     }
 
     if (this.#turnOrder.length === 0) {
@@ -409,6 +585,8 @@ export class TimelineGame {
     if (removedActivePlayer && this.#current) {
       this.#current.phase = "listening";
       this.#current.challenges = [];
+      this.#current.challengePasses.clear();
+      this.#current.guess = null;
       this.#current.outcome = null;
       this.#current.selectedGap = defaultGap(
         this.#timeline(this.activePlayerId),
@@ -417,13 +595,13 @@ export class TimelineGame {
 
     if (this.#turnOrder.length === 1) {
       this.#status = "finished";
-      this.#winners = [...this.#turnOrder];
+      this.#winners = [];
     }
   }
 
   finish(): void {
     if (this.#status === "finished") return;
-    this.#finishByScore();
+    this.#finishWithoutWinner();
   }
 
   snapshot(): GameSnapshot {
@@ -434,6 +612,8 @@ export class TimelineGame {
             phase: this.#current.phase,
             selectedGap: this.#current.selectedGap,
             challenges: structuredClone(this.#current.challenges),
+            challengePasses: [...this.#current.challengePasses],
+            guessSubmitted: this.#current.guess !== null,
             outcome: structuredClone(this.#current.outcome),
             track:
               this.#current.phase === "revealed"
@@ -461,12 +641,13 @@ export class TimelineGame {
           this.#timelines.get(playerId)?.length ?? 0,
         ]),
       ),
-      challengeTokens: Object.fromEntries(
+      tokens: Object.fromEntries(
         this.#turnOrder.map((playerId) => [
           playerId,
-          this.#challengeTokens.get(playerId) ?? 0,
+          this.#tokens.get(playerId) ?? 0,
         ]),
       ),
+      skippingNextTurnPlayerIds: [...this.#skipNextTurn],
     };
   }
 }

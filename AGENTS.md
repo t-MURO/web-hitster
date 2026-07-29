@@ -24,9 +24,10 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 - Never expose the current mystery title, artist, cover, Spotify URL, YouTube
   result, or temporary filesystem path before reveal. Clients fetch audio only
   through an opaque authenticated room-and-round endpoint.
-- Begin a hosted game once at least 50 unique tracks have been prepared. Track
-  client readiness before host playback, preserve temporary audio for rematches,
-  and delete it when the room closes, expires, or the server restarts.
+- Begin a hosted game once there is one starting card per connected player plus
+  the first mystery track, with an absolute minimum of three prepared tracks.
+  Track client readiness before host playback, preserve temporary audio for
+  rematches, and delete it when the room closes, expires, or the server restarts.
 - Do not blindly trust the first YouTube search result. Rank several candidates
   against Spotify title, artist, and duration metadata, reject risky variants,
   and keep every failed attempt outside the playable deck. Hosts can cancel a
@@ -39,3 +40,12 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
   keep those risks explicit in project documentation.
 - Keep room and deck data ephemeral: no game history, player statistics, or
   persistent database for version one.
+- Follow the Original timeline rules: every player starts with one visible card,
+  the oldest starting card takes the first turn, equal-year placements work on
+  either side, and only completing a ten-card timeline produces a winner.
+- Implement the full music-token economy: start with two, spend one to redraw,
+  spend one to challenge, trade three for a guaranteed card before listening
+  and skip the purchaser's next turn, and earn one for a correct title-and-artist
+  guess up to a maximum of five.
+- After lock-in, require every connected opponent to challenge or explicitly
+  pass before the active player or host can reveal.

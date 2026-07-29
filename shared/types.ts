@@ -65,11 +65,14 @@ export interface GamePlayer {
 }
 
 export interface RoundOutcome {
+  resolution: "placement" | "token-trade";
   correct: boolean;
   previousYear: number | null;
   nextYear: number | null;
   awardedPlayerId: string | null;
   winningChallengePlayerId: string | null;
+  guessCorrect: boolean | null;
+  tokenAwarded: boolean;
 }
 
 export interface RoundChallengeSnapshot {
@@ -81,6 +84,8 @@ export interface CurrentRoundSnapshot {
   phase: GamePhase;
   selectedGap: number;
   challenges: RoundChallengeSnapshot[];
+  challengePasses: string[];
+  guessSubmitted: boolean;
   outcome: RoundOutcome | null;
   track: PublicTrack | null;
 }
@@ -95,7 +100,8 @@ export interface GameSnapshot {
   remainingTrackCount: number;
   winners: string[];
   scores: Record<string, number>;
-  challengeTokens: Record<string, number>;
+  tokens: Record<string, number>;
+  skippingNextTurnPlayerIds: string[];
 }
 
 export interface RoomPlayerSnapshot {
@@ -207,9 +213,8 @@ export interface RoomSnapshot {
   players: RoomPlayerSnapshot[];
   spotify: SpotifyConnectionSnapshot;
   deck: DeckSummary | null;
-  deckReview: Track[] | null;
   playback: PlaybackSnapshot;
-  hostCue: Track | null;
+  hostCue: Pick<Track, "audioCue"> | null;
   game: GameSnapshot | null;
 }
 

@@ -95,21 +95,6 @@ function cleanCode(code: unknown): string {
   return String(code ?? "").trim().toUpperCase();
 }
 
-function cloneTrackForReview(track: Track): Track {
-  return {
-    id: track.id,
-    title: track.title,
-    artist: track.artist,
-    year: track.year,
-    originalYear: track.originalYear,
-    coverUrl: track.coverUrl,
-    audioCue: track.audioCue,
-    durationMs: track.durationMs ?? null,
-    isrc: track.isrc ?? null,
-    spotifyUrl: track.spotifyUrl ?? null,
-  };
-}
-
 function playerFromSession(session: RoomSession): RoomPlayer {
   if (!session.profile) {
     throw new RoomError("Choose your player name first.", "PROFILE_REQUIRED");
@@ -347,7 +332,7 @@ export class RoomManager {
 
     const name = String(payload.name ?? "Custom deck").trim().slice(0, 64);
     const tracks = parseDeck(String(payload.text ?? ""), {
-      minimumTracks: this.#deckSize,
+      minimumTracks: PLAYABLE_TRACK_BUFFER,
     });
     room.deck = {
       name: name || "Custom deck",
@@ -430,15 +415,7 @@ export class RoomManager {
     });
     room.status = "playing";
     room.locked = true;
-    room.playback = {
-      status: "ready",
-      cueVersion: 0,
-      changedAt: Date.now(),
-      roundNumber: room.game.snapshot().roundNumber,
-      startAt: null,
-      positionMs: 0,
-      readyPlayerIds: [],
-    };
+    this.#resetRoundPlayback(room, 0);
   }
 
   #removePlayer(room: Room, sessionId: string): void {
@@ -473,6 +450,19 @@ export class RoomManager {
     return room.game;
   }
 
+  #resetRoundPlayback(room: Room, cueVersion: number): void {
+    const game = this.#activeGame(room);
+    room.playback = {
+      status: "ready",
+      cueVersion,
+      changedAt: Date.now(),
+      roundNumber: game.snapshot().roundNumber,
+      startAt: null,
+      positionMs: 0,
+      readyPlayerIds: [],
+    };
+  }
+
   #pausePlayback(room: Room): void {
     if (room.playback.status === "playing" && room.playback.startAt != null) {
       room.playback.positionMs += Math.max(
@@ -504,6 +494,33 @@ export class RoomManager {
       case "selectGap": {
         const game = this.#activeGame(room);
         game.selectGap(sessionId, Number(commandPayload.gapIndex));
+        break;
+      }
+      case "submitGuess": {
+        const game = this.#activeGame(room);
+        game.submitGuess(
+          sessionId,
+          String(commandPayload.title ?? ""),
+          String(commandPayload.artist ?? ""),
+        );
+        break;
+      }
+      case "skipTrack": {
+        const game = this.#activeGame(room);
+        game.skipTrack(sessionId);
+        this.#resetRoundPlayback(room, room.playback.cueVersion + 1);
+        break;
+      }
+      case "tradeTokensForCard": {
+        const game = this.#activeGame(room);
+        if (room.playback.status !== "ready") {
+          throw new RoomError(
+            "Trade tokens before the host starts the mystery song.",
+          );
+        }
+        game.tradeTokensForCard(sessionId);
+        this.#pausePlayback(room);
+        if (game.status === "finished") room.status = "finished";
         break;
       }
       case "audioReady": {
@@ -576,25 +593,28 @@ export class RoomManager {
         game.challengeGap(sessionId, Number(commandPayload.gapIndex));
         break;
       }
+      case "passChallenge": {
+        const game = this.#activeGame(room);
+        game.passChallenge(sessionId);
+        break;
+      }
       case "reveal": {
         const game = this.#activeGame(room);
-        game.reveal(sessionId, room.hostId);
+        game.reveal(
+          sessionId,
+          room.hostId,
+          [...room.players.values()]
+            .filter((player) => player.connected)
+            .map((player) => player.id),
+        );
         if (game.status === "finished") room.status = "finished";
         break;
       }
       case "nextRound": {
         const game = this.#activeGame(room);
         game.nextRound(sessionId, room.hostId);
-        room.playback = {
-          status: "ready",
-          cueVersion: room.playback.cueVersion + 1,
-          changedAt: Date.now(),
-          roundNumber: game.snapshot().roundNumber,
-          startAt: null,
-          positionMs: 0,
-          readyPlayerIds: [],
-        };
         if (game.status === "finished") room.status = "finished";
+        else this.#resetRoundPlayback(room, room.playback.cueVersion + 1);
         break;
       }
       case "endGame":
@@ -756,17 +776,13 @@ export class RoomManager {
                 : null,
           }
         : null,
-      deckReview:
-        isHost && room.status === "lobby" && room.deck
-          ? room.deck.tracks.map(cloneTrackForReview)
-          : null,
       playback: structuredClone(room.playback),
       hostCue:
         isHost &&
         room.status === "playing" &&
         !isHostedSource(room.deck?.source) &&
         currentTrack
-          ? cloneTrackForReview(currentTrack)
+          ? { audioCue: currentTrack.audioCue }
           : null,
       game,
     };
@@ -952,15 +968,7 @@ export class RoomManager {
         previousRoundNumber !== null &&
         room.game.snapshot().roundNumber !== previousRoundNumber
       ) {
-        room.playback = {
-          status: "ready",
-          cueVersion: room.playback.cueVersion + 1,
-          changedAt: Date.now(),
-          roundNumber: room.game.snapshot().roundNumber,
-          startAt: null,
-          positionMs: 0,
-          readyPlayerIds: [],
-        };
+        this.#resetRoundPlayback(room, room.playback.cueVersion + 1);
       }
       room.deck.preparation.readyCount = room.deck.tracks.length;
       room.deck.preparation.message =

@@ -195,10 +195,7 @@ test("failed Spotify matches are listed but excluded from the game deck", () => 
       retryable: true,
     },
   ]);
-  assert.equal(
-    snapshot.deckReview?.some((track) => track.id === failedTrack.id),
-    false,
-  );
+  assert.equal("deckReview" in snapshot, false);
 
   const retry = manager.retryHostedFailures({
     code,

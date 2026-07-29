@@ -14,15 +14,21 @@ synchronizes blind playback across the room.
 - Asynchronous YouTube search plus `yt-dlp`/`ffmpeg` MP3 preparation
 - Multi-candidate title/artist/duration matching that rejects common live,
   cover, karaoke, remix, sped-up, and slowed variants
-- Live preparation progress, skipped-track count, and host year review
+- Live preparation progress and skipped-track count without a metadata review
 - Per-track and retry-all recovery, attempt counts, cancellation, and processor
   diagnostics
 - Explicit non-retryable exclusions for unavailable Spotify items, local files,
   and tracks without usable release-year metadata
-- Start as soon as 50 unique tracks are ready; no repeats within a game
+- Start once every player has a starting card plus one mystery track (minimum
+  three); no repeats within a game
 - Authenticated per-round MP3 delivery with HTTP range support
 - Client preload acknowledgements and server-scheduled synchronized starts
-- Blind placement, reveal, scoring, reconnects, host transfer, and rematches
+- Oldest-card first turn, blind placement, equal-year handling, reveal, scoring,
+  reconnects, host transfer, and rematches
+- Full music-token rules: redraw, challenge and steal, three-token guaranteed
+  card with a skipped turn, and title-and-artist token earning capped at five
+- Explicit challenge-or-pass responses from every connected opponent before
+  reveal
 - CSV/JSON decks with host-managed external cues as a fallback
 - A generated hosted-audio demo that exercises the full streaming path without
   Spotify credentials or YouTube access

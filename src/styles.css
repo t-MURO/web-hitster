@@ -1300,66 +1300,6 @@ a {
   font-size: 11px;
 }
 
-.year-review {
-  margin-top: 16px;
-  border-top: 1px solid var(--line);
-}
-
-.year-review summary {
-  padding-block: 16px;
-  color: #c8c2b5;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.year-review__list {
-  max-height: 270px;
-  overflow: auto;
-  padding-right: 8px;
-}
-
-.year-review__list label {
-  min-height: 52px;
-  display: grid;
-  grid-template-columns: 1fr 90px;
-  align-items: center;
-  gap: 16px;
-  border-top: 1px solid #292b29;
-}
-
-.year-review__list label span {
-  min-width: 0;
-  display: grid;
-}
-
-.year-review__list strong,
-.year-review__list small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.year-review__list strong {
-  font-size: 12px;
-}
-
-.year-review__list small {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.year-review__list input {
-  width: 86px;
-  min-height: 34px;
-  padding: 0 8px;
-  border: 1px solid #45453f;
-  border-radius: 4px;
-  background: #0d0f0f;
-  color: var(--amber);
-}
-
 .waiting-card {
   min-height: 210px;
   display: grid;
@@ -1538,7 +1478,7 @@ a {
   position: relative;
   min-height: 520px;
   display: grid;
-  grid-template-rows: auto auto minmax(230px, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(230px, 1fr) auto;
   align-items: center;
   padding: 16px 28px 20px;
   overflow: hidden;
@@ -1619,6 +1559,107 @@ a {
   font-weight: 400;
   letter-spacing: 0.08em;
   text-align: center;
+}
+
+.round-rule-tools {
+  width: min(1040px, 100%);
+  justify-self: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.round-rule-tools:empty {
+  width: 0;
+  padding: 0;
+}
+
+.round-rule-tools--answer {
+  grid-template-columns: 1fr;
+}
+
+.round-rule-tools--tokens-only {
+  grid-template-columns: 1fr;
+}
+
+.round-rule-tools--tokens-only .token-actions {
+  justify-self: center;
+}
+
+.reveal-answer {
+  min-height: 74px;
+  display: flex;
+  align-items: center;
+  justify-self: center;
+  gap: 14px;
+  padding: 8px 18px 8px 8px;
+  border: 1px solid #4e5e45;
+  border-radius: 7px;
+  background: #131913;
+}
+
+.reveal-answer img {
+  width: 58px;
+  height: 58px;
+  display: block;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.reveal-answer > div {
+  display: grid;
+  gap: 2px;
+}
+
+.reveal-answer strong {
+  color: var(--cream);
+  font-size: 16px;
+}
+
+.reveal-answer small {
+  color: var(--green);
+}
+
+.song-guess {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.25fr) minmax(150px, 1fr) minmax(150px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.song-guess > div {
+  display: grid;
+  gap: 5px;
+}
+
+.song-guess > div > span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.song-guess input {
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid #494943;
+  border-radius: 6px;
+  background: #0e1010;
+  color: var(--cream);
+}
+
+.song-guess .secondary-button,
+.token-actions .secondary-button {
+  min-height: 42px;
+  padding-inline: 14px;
+  white-space: nowrap;
+}
+
+.token-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .timeline-scroller {
@@ -1892,6 +1933,10 @@ a {
 .selection-status {
   color: #7f796e;
   font-size: 10px;
+}
+
+.guess-result.is-correct {
+  color: var(--green);
 }
 
 .round-stage--revealed .listening-state {

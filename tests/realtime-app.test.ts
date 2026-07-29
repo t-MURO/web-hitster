@@ -135,7 +135,7 @@ test("two browser sessions can create, join, start, and reveal without leaking m
     required(required(hostStart.game, "host game").current, "host round").track,
     null,
   );
-  assert.ok(required(hostStart.hostCue, "host cue").title);
+  assert.ok(required(hostStart.hostCue, "host cue").audioCue);
 
   const guestSessionId = required(
     application.sessions.fromCookieHeader(guestCookie),
@@ -163,9 +163,19 @@ test("two browser sessions can create, join, start, and reveal without leaking m
     "active player",
   );
   const activeSocket = activeId === hostSessionId ? hostSocket : guestSocket;
-  const revealed = await action(activeSocket, "command", {
+  const opponentSocket =
+    activeId === hostSessionId ? guestSocket : hostSocket;
+  await action(activeSocket, "command", {
     code,
     type: "lockIn",
+  });
+  await action(opponentSocket, "command", {
+    code,
+    type: "passChallenge",
+  });
+  const revealed = await action(activeSocket, "command", {
+    code,
+    type: "reveal",
   });
 
   const revealedGame = required(
