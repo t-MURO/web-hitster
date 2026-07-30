@@ -47,7 +47,12 @@ import {
   primeRoomAudio,
   useSynchronizedAudio,
 } from "./useSynchronizedAudio.js";
-import { MAX_PLAYERS, MIN_PLAYERS } from "../shared/types.js";
+import {
+  MAX_PLAYERS,
+  MAX_WINNING_TIMELINE_SIZE,
+  MIN_PLAYERS,
+  MIN_WINNING_TIMELINE_SIZE,
+} from "../shared/types.js";
 import type {
   ClientConfig,
   CurrentRoundSnapshot,
@@ -478,7 +483,7 @@ function HomeScreen({
   profile: PlayerProfile;
   connected: boolean;
   config: ClientConfig;
-  createRoom: AsyncCallback;
+  createRoom: (winningTimelineSize: number) => Promise<unknown>;
   joinRoom: (code: string) => Promise<unknown>;
   onLogout: () => Promise<void>;
 }) {
@@ -487,6 +492,9 @@ function HomeScreen({
   );
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [winningTimelineSize, setWinningTimelineSize] = useState(
+    config.winningTimelineSize,
+  );
 
   async function run(label: string, callback: AsyncCallback) {
     setBusy(label);
@@ -518,15 +526,38 @@ function HomeScreen({
             <span className="eyebrow">Game master</span>
             <h1>Start a room</h1>
             <p>
-              Choose a Spotify playlist, then invite 1–4 friends for a private
+              Choose a Spotify playlist, then invite 1–9 friends for a private
               game.
             </p>
+            <div className="win-target-control">
+              <label htmlFor="win-target">
+                <span>Points needed to win</span>
+                <output>{winningTimelineSize}</output>
+              </label>
+              <input
+                id="win-target"
+                max={MAX_WINNING_TIMELINE_SIZE}
+                min={MIN_WINNING_TIMELINE_SIZE}
+                onChange={(event) =>
+                  setWinningTimelineSize(Number(event.target.value))
+                }
+                step="1"
+                type="range"
+                value={winningTimelineSize}
+              />
+              <small>
+                First player to collect {winningTimelineSize} timeline cards
+                wins.
+              </small>
+            </div>
             <button
               className="primary-button"
               disabled={!connected || Boolean(busy)}
               onClick={() => {
                 primeRoomAudio();
-                void run("create", createRoom);
+                void run("create", () =>
+                  createRoom(winningTimelineSize),
+                );
               }}
               type="button"
             >
@@ -568,8 +599,8 @@ function HomeScreen({
         </div>
         <ErrorBanner message={error} onClose={() => setError("")} />
         <p className="privacy-note">
-          Private rooms for {MIN_PLAYERS}–{MAX_PLAYERS} friends. First to{" "}
-          {config.winningTimelineSize} timeline cards wins.
+          Private rooms for {MIN_PLAYERS}–{MAX_PLAYERS} friends. The host
+          chooses the winning score.
         </p>
       </section>
     </main>
@@ -797,6 +828,9 @@ function LobbyScreen({
                 ? "Pick your spot in the call while the host gets the room ready."
                 : "Keep your external voice or video call open for host-managed cues."}
           </p>
+          <span className="lobby-win-target">
+            First to {room.rules.winningTimelineSize} points
+          </span>
         </div>
 
         <div className="lobby-panels">
@@ -2100,17 +2134,39 @@ function GameScreen({
             </span>
           )}
           {revealed && game.current.outcome?.guessCorrect !== null && (
-            <span
-              className={`selection-status guess-result ${
-                game.current.outcome?.guessCorrect ? "is-correct" : ""
-              }`}
-            >
-              {game.current.outcome?.guessCorrect
-                ? game.current.outcome.tokenAwarded
-                  ? "Title and artist correct · You earned 1 music token."
-                  : "Title and artist correct · Your token stack is already full."
-                : "The title or artist guess was not correct."}
-            </span>
+            game.current.outcome?.guessCorrect ? (
+              <div
+                aria-live="polite"
+                className={`token-reward ${
+                  game.current.outcome.tokenAwarded
+                    ? ""
+                    : "token-reward--full"
+                }`}
+                role="status"
+              >
+                <span className="token-reward__coin" aria-hidden="true">
+                  {game.current.outcome.tokenAwarded ? "+1" : "5/5"}
+                </span>
+                <span>
+                  <strong>
+                    {game.current.outcome.tokenAwarded
+                      ? "Music token earned"
+                      : "Correct answer"}
+                  </strong>
+                  <small>
+                    {game.current.outcome.tokenAwarded
+                      ? room.viewerId === game.activePlayerId
+                        ? "You named the exact title and main artist."
+                        : `${activePlayer.displayName} named the exact title and main artist.`
+                      : "The token stack is already full."}
+                  </small>
+                </span>
+              </div>
+            ) : (
+              <span className="selection-status guess-result">
+                The title or artist guess was not correct.
+              </span>
+            )
           )}
           {revealed && tokenTrade && (
             <span className="selection-status">
@@ -2176,8 +2232,8 @@ function ResultsScreen({
         </h1>
         <p>
           {winners.length
-            ? "The first player to complete a ten-card timeline wins."
-            : "No player completed a ten-card timeline."}
+            ? `The first player to reach ${room.rules.winningTimelineSize} timeline points wins.`
+            : `No player reached ${room.rules.winningTimelineSize} timeline points.`}
         </p>
         <div className="scoreboard">
           {ranked.map((player, index) => (

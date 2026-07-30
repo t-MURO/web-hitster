@@ -12,7 +12,7 @@ export interface RoomConnection {
   room: RoomSnapshot | null;
   connected: boolean;
   connectionError: string;
-  createRoom: () => Promise<RoomActionResult>;
+  createRoom: (winningTimelineSize: number) => Promise<RoomActionResult>;
   joinRoom: (code: string) => Promise<RoomActionResult>;
   command: RoomCommand;
 }
@@ -123,7 +123,8 @@ export function useRoom(enabled: boolean): RoomConnection {
     room,
     connected,
     connectionError,
-    createRoom: () => action("create"),
+    createRoom: (winningTimelineSize: number) =>
+      action("create", { winningTimelineSize }),
     joinRoom: (code: string) => action("join", { code }),
     command,
   };

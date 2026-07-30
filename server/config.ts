@@ -1,4 +1,8 @@
-import type { AppConfig } from "../shared/types.js";
+import {
+  MAX_WINNING_TIMELINE_SIZE,
+  MIN_WINNING_TIMELINE_SIZE,
+  type AppConfig,
+} from "../shared/types.js";
 import os from "node:os";
 import path from "node:path";
 
@@ -73,6 +77,16 @@ export function validateConfig(config: AppConfig): string[] {
 
   if (config.deckSize < 12) {
     errors.push("DECK_SIZE must be at least 12.");
+  }
+
+  if (
+    !Number.isInteger(config.winningTimelineSize) ||
+    config.winningTimelineSize < MIN_WINNING_TIMELINE_SIZE ||
+    config.winningTimelineSize > MAX_WINNING_TIMELINE_SIZE
+  ) {
+    errors.push(
+      `WINNING_TIMELINE_SIZE must be between ${MIN_WINNING_TIMELINE_SIZE} and ${MAX_WINNING_TIMELINE_SIZE}.`,
+    );
   }
 
   if (Boolean(config.spotifyClientId) !== Boolean(config.spotifyClientSecret)) {

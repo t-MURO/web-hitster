@@ -9,6 +9,7 @@ synchronizes blind playback across the room.
 
 - Temporary five-character room codes and shareable `/room/CODE` invite URLs
 - Fixed 2–10-player roster with no late joining after play starts
+- Host-selected 5–20-point win target when the room is created
 - Host-only Spotify Authorization Code login; secrets and tokens stay server-side
 - Spotify title, artists, album release year, cover, duration, and ISRC metadata
 - Asynchronous YouTube search plus `yt-dlp`/`ffmpeg` MP3 preparation
@@ -26,7 +27,8 @@ synchronizes blind playback across the room.
 - Oldest-card first turn, blind placement, grouped equal-year cards, reveal, scoring,
   reconnects, host transfer, and rematches
 - Full music-token rules: redraw, challenge and steal, three-token guaranteed
-  card with a skipped turn, and title-and-artist token earning capped at five
+  card with a skipped turn, and prominent title-and-artist token earning capped
+  at five
 - A visible 15-second challenge window; unanswered opponents automatically pass
 - CSV/JSON decks with host-managed external cues as a fallback
 - A generated hosted-audio demo that exercises the full streaming path without

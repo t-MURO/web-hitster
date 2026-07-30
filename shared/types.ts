@@ -2,6 +2,8 @@ export const AVATAR_KEYS = ["maya", "leo", "sofia", "ben", "nora"] as const;
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 10;
 export const CHALLENGE_WINDOW_MS = 15_000;
+export const MIN_WINNING_TIMELINE_SIZE = 5;
+export const MAX_WINNING_TIMELINE_SIZE = 20;
 
 export type AvatarKey = (typeof AVATAR_KEYS)[number];
 export type GamePhase = "listening" | "challenging" | "revealed";

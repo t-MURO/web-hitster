@@ -9,7 +9,11 @@ import type {
   RoomSnapshot,
   Track,
 } from "../shared/types.js";
-import { MAX_PLAYERS } from "../shared/types.js";
+import {
+  MAX_PLAYERS,
+  MAX_WINNING_TIMELINE_SIZE,
+  MIN_WINNING_TIMELINE_SIZE,
+} from "../shared/types.js";
 import { createDemoDeck, DeckError, parseDeck } from "./deck-parser.js";
 import { GameRuleError, TimelineGame } from "./game-engine.js";
 
@@ -68,6 +72,7 @@ interface Room {
   game: TimelineGame | null;
   playback: PlaybackSnapshot;
   rematchNumber: number;
+  winningTimelineSize: number;
 }
 
 export class RoomError extends Error {
@@ -290,7 +295,11 @@ export class RoomManager {
     player.disconnectedAt = null;
   }
 
-  #create(sessionId: string, socketId: string): RoomActionResult {
+  #create(
+    sessionId: string,
+    socketId: string,
+    payload: Payload,
+  ): RoomActionResult {
     const session = this.#session(sessionId);
     if (session.roomCode && this.#rooms.has(session.roomCode)) {
       throw new RoomError("Leave your current room before creating another.");
@@ -298,6 +307,19 @@ export class RoomManager {
 
     const code = this.#generateCode();
     const player = playerFromSession(session);
+    const requestedWinningTimelineSize = Number(
+      payload.winningTimelineSize ?? this.#winningTimelineSize,
+    );
+    if (
+      !Number.isInteger(requestedWinningTimelineSize) ||
+      requestedWinningTimelineSize < MIN_WINNING_TIMELINE_SIZE ||
+      requestedWinningTimelineSize > MAX_WINNING_TIMELINE_SIZE
+    ) {
+      throw new RoomError(
+        `Choose a win target between ${MIN_WINNING_TIMELINE_SIZE} and ${MAX_WINNING_TIMELINE_SIZE}.`,
+        "INVALID_WIN_TARGET",
+      );
+    }
     const room: Room = {
       code,
       hostId: sessionId,
@@ -317,6 +339,7 @@ export class RoomManager {
         readyPlayerIds: [],
       },
       rematchNumber: 0,
+      winningTimelineSize: requestedWinningTimelineSize,
     };
 
     this.#attachSocket(room, player, socketId);
@@ -464,7 +487,7 @@ export class RoomManager {
       players,
       tracks,
       random: this.#random,
-      winningTimelineSize: this.#winningTimelineSize,
+      winningTimelineSize: room.winningTimelineSize,
       maximumTrackCount: this.#deckSize,
       acceptingTracks,
     });
@@ -737,7 +760,9 @@ export class RoomManager {
   }): RoomActionResult {
     try {
       let result: RoomActionResult;
-      if (type === "create") result = this.#create(sessionId, socketId);
+      if (type === "create") {
+        result = this.#create(sessionId, socketId, payload);
+      }
       else if (type === "join") {
         result = this.#join(sessionId, socketId, payload);
       } else if (type === "resume") {
@@ -808,7 +833,7 @@ export class RoomManager {
       rematchNumber: room.rematchNumber,
       rules: {
         deckSize: this.#deckSize,
-        winningTimelineSize: this.#winningTimelineSize,
+        winningTimelineSize: room.winningTimelineSize,
         disconnectGraceMs: this.#disconnectGraceMs,
       },
       players: [...room.players.values()].map((player) => ({

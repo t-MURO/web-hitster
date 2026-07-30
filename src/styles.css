@@ -494,11 +494,69 @@ a {
   text-transform: uppercase;
 }
 
+.win-target-control {
+  width: 100%;
+  display: grid;
+  gap: 9px;
+  margin-top: 22px;
+  padding: 14px 16px;
+  border: 1px solid #4f4638;
+  border-radius: 7px;
+  background: #171612;
+}
+
+.win-target-control label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #c9c3b7;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.win-target-control output {
+  min-width: 38px;
+  color: var(--amber);
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 28px;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-align: right;
+}
+
+.win-target-control input[type="range"] {
+  width: 100%;
+  accent-color: var(--amber);
+  cursor: pointer;
+}
+
+.win-target-control small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .privacy-note {
   margin: 24px 0 0;
   color: #77736a;
   font-size: 12px;
   text-align: center;
+}
+
+.lobby-win-target {
+  width: fit-content;
+  display: inline-flex;
+  margin-top: 14px;
+  padding: 7px 10px;
+  border: 1px solid #6d512c;
+  border-radius: 4px;
+  color: var(--amber);
+  background: #1c1812;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
 
 .error-banner {
@@ -2051,8 +2109,54 @@ a {
   font-size: 10px;
 }
 
-.guess-result.is-correct {
+.token-reward {
+  min-width: 330px;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 10px 16px 10px 10px;
+  border: 1px solid #5e9b70;
+  border-radius: 7px;
+  background: #13251a;
   color: var(--green);
+  box-shadow: 0 0 24px rgb(100 217 133 / 13%);
+}
+
+.token-reward--full {
+  border-color: #665b42;
+  background: #211d15;
+  color: var(--amber);
+  box-shadow: none;
+}
+
+.token-reward__coin {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+}
+
+.token-reward > span:last-child {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+}
+
+.token-reward strong {
+  color: var(--cream);
+  font-size: 14px;
+  text-transform: uppercase;
+}
+
+.token-reward small {
+  color: currentColor;
+  font-size: 10px;
 }
 
 .round-stage--revealed .listening-state {
