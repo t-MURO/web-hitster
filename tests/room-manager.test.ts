@@ -74,6 +74,15 @@ test("starting locks the room against new players", () => {
   );
 });
 
+test("room snapshots keep preset portraits keyed instead of storing asset URLs", () => {
+  const { manager } = managerFixture();
+  const created = execute(manager, "host", "socket-host", "create");
+  const snapshot = manager.snapshot(String(created.code), "host");
+
+  assert.equal(snapshot.players[0]?.avatarKey, "maya");
+  assert.equal(snapshot.players[0]?.avatarUrl, null);
+});
+
 test("a disconnected host is removed and host ownership transfers", async () => {
   const { manager } = managerFixture({ disconnectGraceMs: 5 });
   const created = execute(manager, "host", "socket-host", "create");

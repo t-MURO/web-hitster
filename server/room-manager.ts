@@ -40,7 +40,7 @@ interface RoomPlayer {
   id: string;
   displayName: string;
   avatarKey: AvatarKey;
-  avatarUrl: string;
+  avatarUrl: string | null;
   connected: boolean;
   disconnectedAt: number | null;
   joinedAt: number;
@@ -109,9 +109,7 @@ function playerFromSession(session: RoomSession): RoomPlayer {
     id: session.id,
     displayName: session.profile.displayName,
     avatarKey: session.profile.avatarKey,
-    avatarUrl:
-      session.profile.avatarUrl ??
-      `/assets/avatars/${session.profile.avatarKey}.png`,
+    avatarUrl: session.profile.avatarUrl ?? null,
     connected: true,
     disconnectedAt: null,
     joinedAt: Date.now(),

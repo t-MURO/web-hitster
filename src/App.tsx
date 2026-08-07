@@ -166,10 +166,16 @@ function forgetProfile(): void {
   }
 }
 
-function playerAvatar(profile: PlayerProfile): string {
+function presetAvatarUrl(avatarKey: PlayerProfile["avatarKey"]): string {
+  return `/assets/avatars/${avatarKey}.png`;
+}
+
+function playerAvatar(
+  profile: Pick<PlayerProfile, "avatarKey" | "avatarUrl">,
+): string {
   return isProfilePhoto(profile.avatarUrl)
     ? profile.avatarUrl
-    : `/assets/avatars/${profile.avatarKey}.png`;
+    : presetAvatarUrl(profile.avatarKey);
 }
 
 function loadPhoto(url: string): Promise<HTMLImageElement> {
@@ -420,7 +426,7 @@ function ProfileScreen({
                     }}
                     type="button"
                   >
-                    <img src={`/assets/avatars/${avatar}.png`} alt="" />
+                    <img src={presetAvatarUrl(avatar)} alt="" />
                   </button>
                 ))}
                 <label
@@ -617,7 +623,7 @@ function PlayerAvatar({
   return (
     <img
       className={small ? "avatar avatar--small" : "avatar"}
-      src={player.avatarUrl}
+      src={playerAvatar(player)}
       alt=""
     />
   );

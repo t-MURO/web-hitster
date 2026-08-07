@@ -66,7 +66,7 @@ export type PublicTrack = Pick<
 export interface GamePlayer {
   id: string;
   displayName: string;
-  avatarUrl: string;
+  avatarUrl: string | null;
 }
 
 export interface RoundOutcome {
@@ -114,7 +114,7 @@ export interface RoomPlayerSnapshot {
   id: string;
   displayName: string;
   avatarKey: AvatarKey;
-  avatarUrl: string;
+  avatarUrl: string | null;
   connected: boolean;
   disconnectedAt: number | null;
   host: boolean;
